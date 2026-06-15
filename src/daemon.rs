@@ -133,7 +133,8 @@ fn execute_daemon_effect(
             let region = model
                 .config
                 .settings
-                .geo_region
+                .geo_routing
+                .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
                 let result = match crate::infra::geo::GeoManager::new() {
@@ -151,7 +152,8 @@ fn execute_daemon_effect(
             let region = model
                 .config
                 .settings
-                .geo_region
+                .geo_routing
+                .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
                 let last_updated = crate::infra::geo::GeoManager::new()
@@ -166,7 +168,8 @@ fn execute_daemon_effect(
             let region = model
                 .config
                 .settings
-                .geo_region
+                .geo_routing
+                .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
                 let result = match crate::infra::geo::GeoManager::new() {

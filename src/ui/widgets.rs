@@ -114,9 +114,13 @@ impl<'a> Widget for StatusBar<'a> {
             _ => ("[DISCONNECTED]", Theme::error()),
         };
 
-        let routing = format!("[{}]", self.model.config.settings.routing_mode.as_str());
+        let routing = format!(
+            "[{}]",
+            self.model.config.settings.geo_routing.mode().as_str()
+        );
 
-        let is_global = self.model.config.settings.geo_region == Some(GeoRegion::Global);
+        let is_global =
+            self.model.config.settings.geo_routing.current_region == Some(GeoRegion::Global);
 
         let mut spans = vec![Span::styled(status, style)];
 
@@ -341,7 +345,11 @@ mod tests {
     #[test]
     fn status_bar_global_region_hides_geo_info() {
         let mut model = model_with_profiles(vec![]);
-        model.config.settings.geo_region = Some(GeoRegion::Global);
+        model
+            .config
+            .settings
+            .geo_routing
+            .set_region(GeoRegion::Global);
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
         StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);

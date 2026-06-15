@@ -102,8 +102,7 @@ impl Model {
 
     /// Initialize application state and load persisted configuration.
     pub fn new() -> anyhow::Result<Self> {
-        let mut config = load_config().unwrap_or_default();
-        config.settings.maybe_seed_routing_modes_from_legacy();
+        let config = load_config().unwrap_or_default();
         let selected = config.resolve_selected();
 
         // Detect a background session left by a previous "hide" (q) action.
@@ -133,12 +132,16 @@ impl Model {
             };
 
         // Block auto-connect until the user has picked a geo region.
-        if config.settings.geo_region.is_none() {
+        if config.settings.geo_routing.current_region.is_none() {
             connection = ConnectionState::Idle;
             status = AppStatus::Info("Press ? for help".to_string());
         }
 
-        let region = config.settings.geo_region.unwrap_or(GeoRegion::Global);
+        let region = config
+            .settings
+            .geo_routing
+            .current_region
+            .unwrap_or(GeoRegion::Global);
         let geo_last_updated = crate::infra::geo::GeoManager::new()
             .ok()
             .and_then(|g| g.last_updated(region));
@@ -160,7 +163,7 @@ impl Model {
             should_quit: false,
             geo_last_updated,
         };
-        if model.config.settings.geo_region.is_none() {
+        if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
         }
         if status.text() == "Press ? for help" {
@@ -173,10 +176,13 @@ impl Model {
 
     /// Build a Model from an already-loaded config (used by the TUI client
     /// after it reloads profiles.json independently of the daemon).
-    pub fn from_config(mut config: Config) -> Self {
-        config.settings.maybe_seed_routing_modes_from_legacy();
+    pub fn from_config(config: Config) -> Self {
         let selected = config.resolve_selected();
-        let region = config.settings.geo_region.unwrap_or(GeoRegion::Global);
+        let region = config
+            .settings
+            .geo_routing
+            .current_region
+            .unwrap_or(GeoRegion::Global);
         let geo_last_updated = crate::infra::geo::GeoManager::new()
             .ok()
             .and_then(|g| g.last_updated(region));
@@ -198,7 +204,7 @@ impl Model {
             should_quit: false,
             geo_last_updated,
         };
-        if model.config.settings.geo_region.is_none() {
+        if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
         }
         model
@@ -505,7 +511,7 @@ mod tests {
         config.profiles.push(profile);
         config.settings.auto_connect = true;
         config.settings.last_connected_profile = Some(id);
-        // geo_region is None → overlay must be shown and auto-connect blocked
+        // current_region is None → overlay must be shown and auto-connect blocked
 
         crate::config::save_config(&config).unwrap();
 

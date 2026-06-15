@@ -78,7 +78,14 @@ mod tests {
         let path = file.path().to_path_buf();
 
         let mut config = Config::default();
-        config.settings.routing_mode = profile::RoutingMode::OnlyRu;
+        config
+            .settings
+            .geo_routing
+            .set_region(profile::GeoRegion::Ru);
+        config
+            .settings
+            .geo_routing
+            .set_mode(profile::RoutingMode::OnlyRu);
         config.profiles.push(profile::Profile::new(
             "Test".to_string(),
             profile::Protocol::Vless,

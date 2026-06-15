@@ -41,8 +41,11 @@ pub fn generate_config(
     geo: &GeoAvailability,
 ) -> anyhow::Result<Value> {
     let outbound = build_outbound(profile)?;
-    let (route, rule_sets) =
-        build_route(&settings.routing_mode, settings.dns_strategy.clone(), geo);
+    let (route, rule_sets) = build_route(
+        &settings.geo_routing.mode(),
+        settings.dns_strategy.clone(),
+        geo,
+    );
 
     let mut config = json!({
         "log": {
@@ -380,7 +383,7 @@ fn build_vless_outbound(profile: &Profile) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::{Profile, Protocol, RealitySettings};
+    use crate::config::profile::{GeoRegion, GeoRouting, Profile, Protocol, RealitySettings};
 
     fn test_profile() -> Profile {
         let mut p = Profile::new(
@@ -428,8 +431,11 @@ mod tests {
     #[test]
     fn generated_config_only_ru_final_is_direct() {
         let profile = test_profile();
+        let mut geo_routing = GeoRouting::default();
+        geo_routing.set_region(GeoRegion::Ru);
+        geo_routing.set_mode(RoutingMode::OnlyRu);
         let settings = Settings {
-            routing_mode: RoutingMode::OnlyRu,
+            geo_routing,
             ..Default::default()
         };
         let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
@@ -543,8 +549,11 @@ mod tests {
     #[test]
     fn generated_config_only_cn_final_is_direct() {
         let profile = test_profile();
+        let mut geo_routing = GeoRouting::default();
+        geo_routing.set_region(GeoRegion::Cn);
+        geo_routing.set_mode(RoutingMode::OnlyCn);
         let settings = Settings {
-            routing_mode: RoutingMode::OnlyCn,
+            geo_routing,
             ..Default::default()
         };
         let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();

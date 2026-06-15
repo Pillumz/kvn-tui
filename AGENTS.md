@@ -164,7 +164,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - `RoutingMode::BypassCn` — CN IPs/domains bypass VPN (direct).
 - `RoutingMode::OnlyCn` — only CN IPs/domains go through VPN; everything else is direct.
 - The available routing modes depend on the selected **geo region** (`Ru`, `Cn`, `Ir`, or `Global`). `RoutingMode::available(region)` returns the list dynamically.
-- The chosen `RoutingMode` is stored per geo region in `settings.routing_modes: HashMap<GeoRegion, RoutingMode>`. Switching back to a previously used region restores its last routing mode.
+- Geo-region and routing-mode preferences are grouped under `settings.geo_routing: GeoRouting`. It stores `current_region: Option<GeoRegion>` and `selected_region_modes: HashMap<GeoRegion, RoutingMode>`. The active mode is derived from `selected_region_modes[current_region]` and falls back to `Global`. Switching back to a previously used region restores its last routing mode.
 - Rule-sets are local `.srs` binary files downloaded to `~/.config/kvn-tui/geo/`.
 
 ### Clipboard Parsing
@@ -189,12 +189,12 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - `handle_geo_result`, `Msg::ConnectFailed`, and the `handle_tick` idle fallback also append `Effect::BroadcastState` so state mutations that don't produce other broadcast-triggering effects are still visible to the TUI.
 
 ### Geo Region Selection
-- `settings.geo_region` (`Option<GeoRegion>`) controls which country rule-sets are downloaded and which routing modes are shown.
+- `settings.geo_routing.current_region` (`Option<GeoRegion>`) controls which country rule-sets are downloaded and which routing modes are shown.
 - `GeoRegion::Ru` — download RU geoip/geosite, enable `Global` / `BypassRu` / `OnlyRu`.
 - `GeoRegion::Cn` — download CN geoip/geosite, enable `Global` / `BypassCn` / `OnlyCn`.
 - `GeoRegion::Global` — skip geo downloads, only `Global` mode is available.
-- On first launch (when `geo_region` is `None`), a modal overlay forces the user to pick a region before the main UI is usable.
-- The region can be changed at runtime with the `o` keybinding. When the region changes, the previous region's `RoutingMode` is saved and the new region's previously stored mode is restored (falling back to `Global`).
+- On first launch (when `geo_routing.current_region` is `None`), a modal overlay forces the user to pick a region before the main UI is usable.
+- The region can be changed at runtime with the `o` keybinding. When the region changes, the previous region's mode is saved into `geo_routing.selected_region_modes` and the new region's previously stored mode is restored (falling back to `Global`).
 
 ### Auto-Connect
 - `settings.auto_connect` (persisted in `profiles.json`) controls whether the app reconnects to the last used profile on startup.

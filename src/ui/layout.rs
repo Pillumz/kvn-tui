@@ -175,11 +175,10 @@ fn draw_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
 
 /// Draw the routing mode selection modal.
 fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
-    use crate::config::profile::RoutingMode;
     use ratatui::style::Modifier;
     use ratatui::text::Span;
 
-    let modes = RoutingMode::available(model.config.settings.geo_region);
+    let modes = model.config.settings.geo_routing.available_modes();
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled("Select routing mode", Theme::accent())),
         Line::from(""),
@@ -410,7 +409,11 @@ mod tests {
     fn draw_routing_mode_overlay_snapshot() {
         let mut model = model_with_profiles(vec![]);
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
-        model.config.settings.geo_region = Some(crate::config::profile::GeoRegion::Ru);
+        model
+            .config
+            .settings
+            .geo_routing
+            .set_region(crate::config::profile::GeoRegion::Ru);
         model.overlay = Overlay::RoutingMode;
         model.routing_selected = 2;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
