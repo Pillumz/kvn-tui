@@ -23,7 +23,6 @@ impl std::fmt::Display for Protocol {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum GeoRegion {
-    #[serde(alias = "other")]
     Global,
     Ru,
     Cn,
@@ -407,13 +406,6 @@ mod tests {
         assert_eq!(RoutingMode::OnlyCn.as_str(), "Only CN");
         assert_eq!(RoutingMode::BypassIr.as_str(), "Bypass IR");
         assert_eq!(RoutingMode::OnlyIr.as_str(), "Only IR");
-    }
-
-    #[test]
-    fn geo_region_deserializes_old_other_alias() {
-        let json = r#""other""#;
-        let region: GeoRegion = serde_json::from_str(json).unwrap();
-        assert_eq!(region, GeoRegion::Global);
     }
 
     #[test]
