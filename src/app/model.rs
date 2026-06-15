@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use uuid::Uuid;
 
-use crate::config::profile::{Config, Profile};
+use crate::config::profile::{Config, GeoRegion, Profile};
 use crate::config::{load_config, save_config};
 
 /// UI overlay shown on top of the main screen.
@@ -137,9 +137,10 @@ impl Model {
             status = AppStatus::Info("Press ? for help".to_string());
         }
 
+        let region = config.settings.geo_region.unwrap_or(GeoRegion::Global);
         let geo_last_updated = crate::infra::geo::GeoManager::new()
             .ok()
-            .and_then(|g| g.last_updated());
+            .and_then(|g| g.last_updated(region));
 
         let mut model = Self {
             overlay: Overlay::None,
@@ -173,9 +174,10 @@ impl Model {
     /// after it reloads profiles.json independently of the daemon).
     pub fn from_config(config: Config) -> Self {
         let selected = config.resolve_selected();
+        let region = config.settings.geo_region.unwrap_or(GeoRegion::Global);
         let geo_last_updated = crate::infra::geo::GeoManager::new()
             .ok()
-            .and_then(|g| g.last_updated());
+            .and_then(|g| g.last_updated(region));
 
         let mut model = Self {
             overlay: Overlay::None,

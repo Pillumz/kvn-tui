@@ -9,6 +9,7 @@ pub enum Effect {
     },
     Disconnect,
     DownloadGeo,
+    RefreshGeoLastUpdated,
     WriteState,
     SaveConfig,
     OpenEditor(usize),

@@ -7,6 +7,7 @@ pub enum Msg {
     Tick,
     Resize,
     GeoUpdated(GeoResult),
+    GeoLastUpdated(Option<String>),
     SystemResumed,
     Connected { pid: u32 },
     ConnectFailed(String),

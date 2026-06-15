@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -37,8 +38,8 @@ struct GeoMetadata {
     geoip_ir_etag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     geosite_ir_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    updated_at: Option<DateTime<Local>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    updated_at: HashMap<GeoRegion, DateTime<Local>>,
 }
 
 /// Manages downloading and updating geoip/geosite rule-sets for sing-box.
@@ -87,10 +88,14 @@ impl GeoManager {
         (geoip_ir, geosite_ir)
     }
 
-    /// Return a human-readable string of the last update time, or None.
-    pub fn last_updated(&self) -> Option<String> {
+    /// Return a human-readable string of the last update time for the given region, or None.
+    pub fn last_updated(&self, region: GeoRegion) -> Option<String> {
+        if matches!(region, GeoRegion::Global) {
+            return None;
+        }
         let meta = self.load_metadata().ok()?;
         meta.updated_at
+            .get(&region)
             .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
     }
 
@@ -165,8 +170,12 @@ impl GeoManager {
     pub fn download_databases(&self, region: GeoRegion) -> Result<bool> {
         let mut meta = self.load_metadata().unwrap_or_default();
 
+        if matches!(region, GeoRegion::Global) {
+            return Ok(false);
+        }
+
         match region {
-            GeoRegion::Global => return Ok(false),
+            GeoRegion::Global => unreachable!(),
             GeoRegion::Ru => {
                 let (geoip_ru, geosite_ru) = self.local_paths();
 
@@ -220,7 +229,7 @@ impl GeoManager {
             }
         }
 
-        meta.updated_at = Some(Local::now());
+        meta.updated_at.insert(region, Local::now());
         self.save_metadata(&meta)?;
 
         Ok(true)
@@ -248,7 +257,7 @@ impl GeoManager {
             if geosite_need {
                 parts.push(format!("geosite-{}", region.as_str()));
             }
-            let last_updated = self.last_updated();
+            let last_updated = self.last_updated(region);
             Ok(GeoResult::Updated {
                 parts,
                 last_updated,
@@ -360,6 +369,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
+        let now = Local::now();
+        let mut updated_at = HashMap::new();
+        updated_at.insert(GeoRegion::Ru, now);
+        updated_at.insert(GeoRegion::Cn, now);
+        updated_at.insert(GeoRegion::Ir, now);
         let meta = GeoMetadata {
             geoip_ru_etag: Some("etag1".to_string()),
             geosite_ru_etag: Some("etag2".to_string()),
@@ -367,7 +381,7 @@ mod tests {
             geosite_cn_etag: Some("etag4".to_string()),
             geoip_ir_etag: Some("etag5".to_string()),
             geosite_ir_etag: Some("etag6".to_string()),
-            updated_at: Some(Local::now()),
+            updated_at,
         };
         gm.save_metadata(&meta).unwrap();
         let loaded = gm.load_metadata().unwrap();
@@ -377,7 +391,10 @@ mod tests {
         assert_eq!(loaded.geosite_cn_etag, Some("etag4".to_string()));
         assert_eq!(loaded.geoip_ir_etag, Some("etag5".to_string()));
         assert_eq!(loaded.geosite_ir_etag, Some("etag6".to_string()));
-        assert!(loaded.updated_at.is_some());
+        assert_eq!(loaded.updated_at.len(), 3);
+        assert!(loaded.updated_at.contains_key(&GeoRegion::Ru));
+        assert!(loaded.updated_at.contains_key(&GeoRegion::Cn));
+        assert!(loaded.updated_at.contains_key(&GeoRegion::Ir));
     }
 
     #[test]
@@ -396,7 +413,7 @@ mod tests {
         assert!(meta.geosite_cn_etag.is_none());
         assert!(meta.geoip_ir_etag.is_none());
         assert!(meta.geosite_ir_etag.is_none());
-        assert!(meta.updated_at.is_none());
+        assert!(meta.updated_at.is_empty());
         let _ = fs::remove_file(&geoip_ru);
         let _ = fs::remove_file(&geosite_ru);
         let _ = fs::remove_file(&geoip_cn);
@@ -450,7 +467,7 @@ mod tests {
         assert!(geoip_ru.exists(), "geoip-ru.srs should exist");
         assert!(geosite_ru.exists(), "geosite-category-ru.srs should exist");
 
-        let updated = gm.last_updated();
+        let updated = gm.last_updated(GeoRegion::Ru);
         assert!(updated.is_some(), "last_updated should be set");
 
         let result = gm

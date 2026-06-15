@@ -146,6 +146,20 @@ fn execute_daemon_effect(
                 let _ = tx.send(Msg::GeoUpdated(result));
             });
         }
+        Effect::RefreshGeoLastUpdated => {
+            let tx = tx.clone();
+            let region = model
+                .config
+                .settings
+                .geo_region
+                .unwrap_or(crate::config::profile::GeoRegion::Global);
+            thread::spawn(move || {
+                let last_updated = crate::infra::geo::GeoManager::new()
+                    .ok()
+                    .and_then(|g| g.last_updated(region));
+                let _ = tx.send(Msg::GeoLastUpdated(last_updated));
+            });
+        }
         Effect::WriteState => {
             crate::services::waybar::write_state(model);
         }

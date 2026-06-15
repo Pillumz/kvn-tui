@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Row, StatefulWidget, Table, Widget};
 
 use crate::app::model::Model;
+use crate::config::profile::GeoRegion;
 use crate::ui::styles::Theme;
 
 /// Widget that renders the profile list as a table.
@@ -115,14 +116,7 @@ impl<'a> Widget for StatusBar<'a> {
 
         let routing = format!("[{}]", self.model.config.settings.routing_mode.as_str());
 
-        let geo_info = if self.model.geo_updating {
-            "[Geo: updating...]".to_string()
-        } else {
-            match self.model.geo_last_updated {
-                Some(ref dt) => format!("[Geo: {}]", dt),
-                None => "[Geo: never]".to_string(),
-            }
-        };
+        let is_global = self.model.config.settings.geo_region == Some(GeoRegion::Global);
 
         let mut spans = vec![Span::styled(status, style)];
 
@@ -131,13 +125,23 @@ impl<'a> Widget for StatusBar<'a> {
             spans.push(Span::styled("[AUTO]", Theme::accent()));
         }
 
-        spans.extend([
-            Span::raw(" "),
-            Span::styled(routing, Theme::accent()),
-            Span::raw(" "),
-            Span::styled(geo_info, Theme::accent()),
-            Span::raw(" "),
-        ]);
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(routing, Theme::accent()));
+
+        if !is_global {
+            let geo_info = if self.model.geo_updating {
+                "[Geo: updating...]".to_string()
+            } else {
+                match self.model.geo_last_updated {
+                    Some(ref dt) => format!("[Geo: {}]", dt),
+                    None => "[Geo: never]".to_string(),
+                }
+            };
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(geo_info, Theme::accent()));
+        }
+
+        spans.push(Span::raw(" "));
 
         let fixed_width: usize = spans.iter().map(|s| s.content.len()).sum();
         let available = area.width as usize;
@@ -332,6 +336,19 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
         StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);
         insta::assert_snapshot!(buffer_to_string(&buf));
+    }
+
+    #[test]
+    fn status_bar_global_region_hides_geo_info() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Global);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
+        StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);
+        let content: String = buf.content.iter().map(|c| c.symbol()).collect();
+        assert!(content.contains("[DISCONNECTED]"));
+        assert!(content.contains("[Global]"));
+        assert!(!content.contains("[Geo:"));
     }
 
     #[test]

@@ -13,6 +13,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Key(key) => handle_key(model, key),
         Msg::Tick => handle_tick(model),
         Msg::GeoUpdated(result) => handle_geo_result(model, result),
+        Msg::GeoLastUpdated(last_updated) => {
+            model.geo_last_updated = last_updated;
+            vec![Effect::BroadcastState]
+        }
         Msg::SystemResumed => {
             if model.connection == ConnectionState::Connected {
                 let log_effect = set_status(
@@ -218,6 +222,17 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 .unwrap_or(0);
         }
         KeyCode::Char('u') if !model.geo_updating => {
+            if model.config.settings.geo_region == Some(GeoRegion::Global) {
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(
+                        "Geo updates are not available in Global region".to_string(),
+                    ),
+                ) {
+                    effects.push(e);
+                }
+                return effects;
+            }
             model.geo_updating = true;
             if let Some(e) = set_status(
                 model,
@@ -422,6 +437,9 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.config.settings.geo_region = Some(region);
                 model.overlay = Overlay::None;
                 let mut effects = vec![Effect::SaveConfig];
+                if changed {
+                    effects.push(Effect::RefreshGeoLastUpdated);
+                }
                 if let Some(e) = set_status(
                     model,
                     crate::app::model::AppStatus::Info(format!("Geo region: {}", region.as_str())),
@@ -896,7 +914,11 @@ mod tests {
         assert!(model.status.text().contains("cn"));
         assert_eq!(
             effects,
-            vec![Effect::SaveConfig, app_log_info("Geo region: cn")]
+            vec![
+                Effect::SaveConfig,
+                Effect::RefreshGeoLastUpdated,
+                app_log_info("Geo region: cn")
+            ]
         );
     }
 
@@ -937,6 +959,7 @@ mod tests {
             effects,
             vec![
                 Effect::SaveConfig,
+                Effect::RefreshGeoLastUpdated,
                 app_log_info("Geo region: global"),
                 app_log_info("Routing mode reset to Global")
             ]
@@ -968,10 +991,46 @@ mod tests {
             effects,
             vec![
                 Effect::SaveConfig,
+                Effect::RefreshGeoLastUpdated,
                 app_log_info("Geo region: ru"),
                 app_log_info("Auto-connecting to Auto…")
             ]
         );
+    }
+
+    #[test]
+    fn geo_region_same_region_does_not_refresh_last_updated() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Cn);
+        model.overlay = Overlay::GeoRegions;
+        model.geo_region_selected = 1; // Cn
+
+        let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Cn));
+        assert!(!effects.contains(&Effect::RefreshGeoLastUpdated));
+    }
+
+    #[test]
+    fn geo_last_updated_message_updates_model() {
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = None;
+        let effects = update(
+            &mut model,
+            Msg::GeoLastUpdated(Some("2026-06-15 08:00".to_string())),
+        );
+        assert_eq!(model.geo_last_updated, Some("2026-06-15 08:00".to_string()));
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn normal_mode_u_blocked_for_global_region() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Global);
+
+        let effects = handle_main(&mut model, key('u'));
+        assert!(!model.geo_updating);
+        assert!(!effects.contains(&Effect::DownloadGeo));
+        assert!(model.status.text().contains("not available"));
     }
 
     #[test]

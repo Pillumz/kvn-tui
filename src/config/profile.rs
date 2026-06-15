@@ -19,7 +19,7 @@ impl std::fmt::Display for Protocol {
 }
 
 /// Selected geo region for rule-set downloads and routing mode availability.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum GeoRegion {
     #[serde(alias = "other")]
