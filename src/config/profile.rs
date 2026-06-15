@@ -227,33 +227,9 @@ impl GeoRouting {
     }
 }
 
-/// Helper struct used only to deserialize `Settings` while accepting the
-/// v0.11.2 legacy fields `geo_region` and `routing_mode`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SettingsRaw {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    default_profile: Option<Uuid>,
-    #[serde(default = "default_tun_interface")]
-    tun_interface: String,
-    #[serde(default = "default_dns_strategy")]
-    dns_strategy: DnsStrategy,
-    #[serde(default)]
-    geo_routing: GeoRouting,
-    #[serde(default)]
-    auto_connect: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    last_connected_profile: Option<Uuid>,
-
-    // Legacy v0.11.2 fields.
-    #[serde(default)]
-    geo_region: Option<GeoRegion>,
-    #[serde(default)]
-    routing_mode: RoutingMode,
-}
-
 /// Application settings stored alongside profiles.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<Uuid>,
@@ -267,12 +243,6 @@ pub struct Settings {
     pub auto_connect: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_profile: Option<Uuid>,
-
-    // Legacy v0.11.2 fields kept only for deserializing old profiles.json.
-    #[serde(skip_serializing)]
-    pub(crate) geo_region: Option<GeoRegion>,
-    #[serde(skip_serializing)]
-    pub(crate) routing_mode: RoutingMode,
 }
 
 fn default_tun_interface() -> String {
@@ -281,41 +251,6 @@ fn default_tun_interface() -> String {
 
 fn default_dns_strategy() -> DnsStrategy {
     DnsStrategy::PreferIpv4
-}
-
-impl<'de> Deserialize<'de> for Settings {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = SettingsRaw::deserialize(deserializer)?;
-        let mut settings = Self {
-            default_profile: raw.default_profile,
-            tun_interface: raw.tun_interface,
-            dns_strategy: raw.dns_strategy,
-            geo_routing: raw.geo_routing,
-            auto_connect: raw.auto_connect,
-            last_connected_profile: raw.last_connected_profile,
-            geo_region: raw.geo_region,
-            routing_mode: raw.routing_mode,
-        };
-        settings.migrate_legacy_geo_routing();
-        Ok(settings)
-    }
-}
-
-impl Settings {
-    /// Migrate legacy v0.11.2 geo/routing fields into `geo_routing`.
-    fn migrate_legacy_geo_routing(&mut self) {
-        if let Some(region) = self.geo_region {
-            self.geo_routing.current_region = Some(region);
-            self.geo_routing
-                .selected_region_modes
-                .insert(region, self.routing_mode);
-        }
-        self.geo_region = None;
-        self.routing_mode = RoutingMode::default();
-    }
 }
 
 impl Default for Settings {
@@ -327,8 +262,6 @@ impl Default for Settings {
             geo_routing: GeoRouting::default(),
             auto_connect: false,
             last_connected_profile: None,
-            geo_region: None,
-            routing_mode: RoutingMode::default(),
         }
     }
 }
@@ -600,18 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_migrate_legacy_geo_routing() {
-        let mut s = Settings {
-            geo_region: Some(GeoRegion::Ru),
-            routing_mode: RoutingMode::BypassRu,
-            ..Default::default()
-        };
-        s.migrate_legacy_geo_routing();
-        assert_eq!(s.geo_routing.current_region, Some(GeoRegion::Ru));
-        assert_eq!(s.geo_routing.mode(), RoutingMode::BypassRu);
-    }
-
-    #[test]
     fn config_default() {
         let c = Config::default();
         assert!(c.profiles.is_empty());
@@ -683,31 +604,6 @@ mod tests {
                 .unwrap_or(RoutingMode::Global),
             RoutingMode::OnlyCn
         );
-    }
-
-    #[test]
-    fn config_deserializes_v0_11_2_legacy_fields() {
-        // v0.11.2 only had geo_region and routing_mode; there was no
-        // routing_modes map and no geo_routing object.
-        let json = r#"{
-            "profiles": [],
-            "settings": {
-                "geo_region": "ru",
-                "routing_mode": "bypass_ru"
-            }
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            config.settings.geo_routing.current_region,
-            Some(GeoRegion::Ru)
-        );
-        assert_eq!(config.settings.geo_routing.mode(), RoutingMode::BypassRu);
-
-        // Reserializing must drop the legacy fields and emit the new shape.
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("\"geo_region\""));
-        assert!(!json.contains("\"routing_mode\""));
-        assert!(json.contains("\"geo_routing\""));
     }
 
     #[test]
