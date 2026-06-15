@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use url::Url;
 use uuid::Uuid;
 
@@ -202,6 +203,8 @@ pub struct Settings {
     pub dns_strategy: DnsStrategy,
     #[serde(default)]
     pub routing_mode: RoutingMode,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub routing_modes: HashMap<GeoRegion, RoutingMode>,
     #[serde(default)]
     pub auto_connect: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,6 +221,39 @@ fn default_dns_strategy() -> DnsStrategy {
     DnsStrategy::PreferIpv4
 }
 
+impl Settings {
+    /// Return the routing mode stored for a specific geo region.
+    /// Falls back to `Global` when no mode has been saved for that region.
+    pub fn routing_mode_for(&self, region: GeoRegion) -> RoutingMode {
+        self.routing_modes
+            .get(&region)
+            .copied()
+            .unwrap_or(RoutingMode::Global)
+    }
+
+    /// Set the active routing mode and persist it for the given geo region.
+    pub fn set_routing_mode(&mut self, region: GeoRegion, mode: RoutingMode) {
+        self.routing_mode = mode;
+        self.routing_modes.insert(region, mode);
+    }
+
+    /// Update the active routing mode to match the stored choice for `region`.
+    pub fn sync_routing_mode_to_region(&mut self, region: GeoRegion) {
+        self.routing_mode = self.routing_mode_for(region);
+    }
+
+    /// Migrate legacy configs that only stored a single `routing_mode`.
+    /// Stores the current mode under the current geo region if the map is empty.
+    pub fn maybe_seed_routing_modes_from_legacy(&mut self) {
+        if !self.routing_modes.is_empty() {
+            return;
+        }
+        if let Some(region) = self.geo_region {
+            self.routing_modes.insert(region, self.routing_mode);
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -225,6 +261,7 @@ impl Default for Settings {
             tun_interface: default_tun_interface(),
             dns_strategy: default_dns_strategy(),
             routing_mode: RoutingMode::default(),
+            routing_modes: HashMap::new(),
             auto_connect: false,
             last_connected_profile: None,
             geo_region: None,
@@ -452,10 +489,66 @@ mod tests {
         assert_eq!(s.tun_interface, "tun0");
         assert_eq!(s.dns_strategy, DnsStrategy::PreferIpv4);
         assert_eq!(s.routing_mode, RoutingMode::Global);
+        assert!(s.routing_modes.is_empty());
         assert!(s.default_profile.is_none());
         assert!(!s.auto_connect);
         assert!(s.last_connected_profile.is_none());
         assert!(s.geo_region.is_none());
+    }
+
+    #[test]
+    fn settings_routing_mode_for_falls_back_to_global() {
+        let s = Settings::default();
+        assert_eq!(s.routing_mode_for(GeoRegion::Ru), RoutingMode::Global);
+    }
+
+    #[test]
+    fn settings_set_routing_mode_persists_per_region() {
+        let mut s = Settings::default();
+        s.set_routing_mode(GeoRegion::Ru, RoutingMode::BypassRu);
+        assert_eq!(s.routing_mode, RoutingMode::BypassRu);
+        assert_eq!(
+            s.routing_modes.get(&GeoRegion::Ru),
+            Some(&RoutingMode::BypassRu)
+        );
+
+        s.set_routing_mode(GeoRegion::Cn, RoutingMode::OnlyCn);
+        assert_eq!(s.routing_mode, RoutingMode::OnlyCn);
+        assert_eq!(s.routing_mode_for(GeoRegion::Ru), RoutingMode::BypassRu);
+        assert_eq!(s.routing_mode_for(GeoRegion::Cn), RoutingMode::OnlyCn);
+    }
+
+    #[test]
+    fn settings_sync_routing_mode_to_region() {
+        let mut s = Settings::default();
+        s.set_routing_mode(GeoRegion::Ru, RoutingMode::OnlyRu);
+        s.set_routing_mode(GeoRegion::Cn, RoutingMode::BypassCn);
+        s.sync_routing_mode_to_region(GeoRegion::Ru);
+        assert_eq!(s.routing_mode, RoutingMode::OnlyRu);
+    }
+
+    #[test]
+    fn settings_seed_routing_modes_from_legacy() {
+        let mut s = Settings {
+            geo_region: Some(GeoRegion::Ru),
+            routing_mode: RoutingMode::BypassRu,
+            ..Default::default()
+        };
+        s.maybe_seed_routing_modes_from_legacy();
+        assert_eq!(s.routing_mode_for(GeoRegion::Ru), RoutingMode::BypassRu);
+    }
+
+    #[test]
+    fn settings_seed_routing_modes_does_not_overwrite_existing() {
+        let mut s = Settings {
+            geo_region: Some(GeoRegion::Ru),
+            routing_mode: RoutingMode::BypassRu,
+            ..Default::default()
+        };
+        s.routing_modes.insert(GeoRegion::Cn, RoutingMode::OnlyCn);
+        s.maybe_seed_routing_modes_from_legacy();
+        assert!(!s.routing_modes.contains_key(&GeoRegion::Ru));
+        assert_eq!(s.routing_mode_for(GeoRegion::Cn), RoutingMode::OnlyCn);
     }
 
     #[test]
@@ -489,6 +582,33 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
+    }
+
+    #[test]
+    fn config_serde_roundtrip_with_per_region_routing_modes() {
+        let mut config = Config::default();
+        config
+            .settings
+            .routing_modes
+            .insert(GeoRegion::Ru, RoutingMode::BypassRu);
+        config
+            .settings
+            .routing_modes
+            .insert(GeoRegion::Cn, RoutingMode::OnlyCn);
+        config.settings.geo_region = Some(GeoRegion::Ru);
+        config.settings.routing_mode = RoutingMode::BypassRu;
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, restored);
+        assert_eq!(
+            restored.settings.routing_mode_for(GeoRegion::Ru),
+            RoutingMode::BypassRu
+        );
+        assert_eq!(
+            restored.settings.routing_mode_for(GeoRegion::Cn),
+            RoutingMode::OnlyCn
+        );
     }
 
     #[test]

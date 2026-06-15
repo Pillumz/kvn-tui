@@ -102,7 +102,8 @@ impl Model {
 
     /// Initialize application state and load persisted configuration.
     pub fn new() -> anyhow::Result<Self> {
-        let config = load_config().unwrap_or_default();
+        let mut config = load_config().unwrap_or_default();
+        config.settings.maybe_seed_routing_modes_from_legacy();
         let selected = config.resolve_selected();
 
         // Detect a background session left by a previous "hide" (q) action.
@@ -172,7 +173,8 @@ impl Model {
 
     /// Build a Model from an already-loaded config (used by the TUI client
     /// after it reloads profiles.json independently of the daemon).
-    pub fn from_config(config: Config) -> Self {
+    pub fn from_config(mut config: Config) -> Self {
+        config.settings.maybe_seed_routing_modes_from_legacy();
         let selected = config.resolve_selected();
         let region = config.settings.geo_region.unwrap_or(GeoRegion::Global);
         let geo_last_updated = crate::infra::geo::GeoManager::new()

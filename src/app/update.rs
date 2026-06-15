@@ -382,8 +382,13 @@ fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter => {
             if let Some(&mode) = available.get(model.routing_selected) {
+                let region = model
+                    .config
+                    .settings
+                    .geo_region
+                    .unwrap_or(GeoRegion::Global);
                 let changed = model.config.settings.routing_mode != mode;
-                model.config.settings.routing_mode = mode;
+                model.config.settings.set_routing_mode(region, mode);
                 model.overlay = Overlay::None;
                 let mut effects = vec![Effect::SaveConfig];
                 if let Some(e) = set_status(
@@ -433,7 +438,9 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter => {
             if let Some(&region) = REGIONS.get(model.geo_region_selected) {
-                let changed = model.config.settings.geo_region != Some(region);
+                let old_region = model.config.settings.geo_region;
+                let old_mode = model.config.settings.routing_mode;
+                let changed = old_region != Some(region);
                 model.config.settings.geo_region = Some(region);
                 model.overlay = Overlay::None;
                 let mut effects = vec![Effect::SaveConfig];
@@ -460,15 +467,28 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     effects.push(Effect::DownloadGeoIfMissing);
                 }
 
-                // Reset routing mode if it is no longer available.
-                let available = RoutingMode::available(Some(region));
-                if !available.contains(&model.config.settings.routing_mode) {
-                    model.config.settings.routing_mode = RoutingMode::Global;
-                    if let Some(e) = set_status(
-                        model,
-                        crate::app::model::AppStatus::Info("Routing mode reset to Global".into()),
-                    ) {
-                        effects.push(e);
+                // Persist the previously active routing mode under the old region
+                // and restore the mode stored for the newly selected region.
+                if changed {
+                    if let Some(old_region) = old_region {
+                        model
+                            .config
+                            .settings
+                            .routing_modes
+                            .insert(old_region, old_mode);
+                    }
+                    model.config.settings.sync_routing_mode_to_region(region);
+                    if model.config.settings.routing_mode != old_mode {
+                        let mode = model.config.settings.routing_mode;
+                        if let Some(e) = set_status(
+                            model,
+                            crate::app::model::AppStatus::Info(format!(
+                                "Routing mode: {}",
+                                mode.as_str()
+                            )),
+                        ) {
+                            effects.push(e);
+                        }
                     }
                 }
 
@@ -965,19 +985,65 @@ mod tests {
         model.config.settings.geo_region = Some(GeoRegion::Ru);
         model.config.settings.routing_mode = RoutingMode::OnlyRu;
         model.overlay = Overlay::GeoRegions;
-        model.geo_region_selected = 3; // Other
+        model.geo_region_selected = 3; // Global
 
         let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Global));
         assert_eq!(model.config.settings.routing_mode, RoutingMode::Global);
+        assert_eq!(
+            model.config.settings.routing_mode_for(GeoRegion::Ru),
+            RoutingMode::OnlyRu,
+            "previous region's routing mode should be preserved"
+        );
         assert_eq!(
             effects,
             vec![
                 Effect::SaveConfig,
                 Effect::RefreshGeoLastUpdated,
                 app_log_info("Geo region: global"),
-                app_log_info("Routing mode reset to Global")
+                app_log_info("Routing mode: Global")
             ]
+        );
+    }
+
+    #[test]
+    fn routing_mode_persists_per_region() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Ru);
+        model
+            .config
+            .settings
+            .set_routing_mode(GeoRegion::Ru, RoutingMode::BypassRu);
+        model.overlay = Overlay::GeoRegions;
+        model.geo_region_selected = 1; // Cn
+
+        // Switch to Cn: routing mode falls back to Global.
+        let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Cn));
+        assert_eq!(model.config.settings.routing_mode, RoutingMode::Global);
+        assert!(effects.contains(&Effect::DownloadGeoIfMissing));
+
+        // Switch back to Ru: routing mode is restored to BypassRu.
+        model.overlay = Overlay::GeoRegions;
+        model.geo_region_selected = 0; // Ru
+        let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Ru));
+        assert_eq!(model.config.settings.routing_mode, RoutingMode::BypassRu);
+        assert!(effects.iter().any(|e| matches!(e, Effect::AppendAppLog { message, .. } if message.contains("Routing mode: Bypass RU"))));
+    }
+
+    #[test]
+    fn routing_mode_change_is_stored_per_region() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Ru);
+        model.overlay = Overlay::RoutingMode;
+        model.routing_selected = 1; // BypassRu
+
+        handle_routing_mode(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.config.settings.routing_mode, RoutingMode::BypassRu);
+        assert_eq!(
+            model.config.settings.routing_mode_for(GeoRegion::Ru),
+            RoutingMode::BypassRu
         );
     }
 
