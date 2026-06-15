@@ -168,6 +168,7 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.routing_selected = snapshot.routing_selected;
     model.geo_region_selected = snapshot.geo_region_selected;
     model.geo_updating = snapshot.geo_updating;
+    model.geo_last_updated = snapshot.geo_last_updated;
     model.overlay = snapshot.overlay;
     model.config.profiles = snapshot.profiles;
     model.config.settings = snapshot.settings;

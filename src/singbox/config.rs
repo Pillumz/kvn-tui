@@ -1,12 +1,48 @@
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 use crate::config::profile::{DnsStrategy, Profile, RoutingMode, Settings, TransportType};
 
+/// Availability of local geoip/geosite rule-sets used when building routes.
+/// Each region is present only when both files exist.
+#[derive(Debug, Clone, Default)]
+pub struct GeoAvailability {
+    pub ru: Option<(PathBuf, PathBuf)>,
+    pub cn: Option<(PathBuf, PathBuf)>,
+    pub ir: Option<(PathBuf, PathBuf)>,
+}
+
+impl GeoAvailability {
+    /// All rule-sets are available with dummy paths for tests.
+    #[cfg(test)]
+    pub fn all() -> Self {
+        Self {
+            ru: Some((
+                PathBuf::from("/geo/geoip-ru.srs"),
+                PathBuf::from("/geo/geosite-category-ru.srs"),
+            )),
+            cn: Some((
+                PathBuf::from("/geo/geoip-cn.srs"),
+                PathBuf::from("/geo/geosite-cn.srs"),
+            )),
+            ir: Some((
+                PathBuf::from("/geo/geoip-ir.srs"),
+                PathBuf::from("/geo/geosite-category-ir.srs"),
+            )),
+        }
+    }
+}
+
 /// Generate a complete sing-box JSON configuration from a profile.
 /// Uses the modern sing-box 1.12+ format.
-pub fn generate_config(profile: &Profile, settings: &Settings) -> anyhow::Result<Value> {
+pub fn generate_config(
+    profile: &Profile,
+    settings: &Settings,
+    geo: &GeoAvailability,
+) -> anyhow::Result<Value> {
     let outbound = build_outbound(profile)?;
-    let (route, rule_sets) = build_route(&settings.routing_mode, settings.dns_strategy.clone());
+    let (route, rule_sets) =
+        build_route(&settings.routing_mode, settings.dns_strategy.clone(), geo);
 
     let mut config = json!({
         "log": {
@@ -67,7 +103,11 @@ pub fn generate_config(profile: &Profile, settings: &Settings) -> anyhow::Result
 
 /// Build route object and local rule-sets based on routing mode.
 /// Returns (route_value, rule_sets_vec).
-fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value, Vec<Value>) {
+fn build_route(
+    routing_mode: &RoutingMode,
+    dns_strategy: DnsStrategy,
+    geo: &GeoAvailability,
+) -> (Value, Vec<Value>) {
     let mut rules = vec![
         json!({
             "ip_version": 6,
@@ -93,32 +133,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_ru, geosite_ru) = geo.local_paths();
-                if geosite_ru.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-category-ru"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-category-ru",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_ru
-                    }));
-                }
-                if geoip_ru.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-ru"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-ru",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_ru
-                    }));
-                }
+            if let Some((geoip_ru, geosite_ru)) = &geo.ru {
+                rules.push(json!({
+                    "rule_set": ["geosite-category-ru"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-category-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_ru
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-ru"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_ru
+                }));
             }
         }
         RoutingMode::OnlyRu => {
@@ -126,32 +161,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_ru, geosite_ru) = geo.local_paths();
-                if geosite_ru.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-category-ru"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-category-ru",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_ru
-                    }));
-                }
-                if geoip_ru.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-ru"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-ru",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_ru
-                    }));
-                }
+            if let Some((geoip_ru, geosite_ru)) = &geo.ru {
+                rules.push(json!({
+                    "rule_set": ["geosite-category-ru"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-category-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_ru
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-ru"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_ru
+                }));
             }
         }
         RoutingMode::BypassCn => {
@@ -159,32 +189,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_cn, geosite_cn) = geo.local_paths_cn();
-                if geosite_cn.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-cn"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-cn",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_cn
-                    }));
-                }
-                if geoip_cn.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-cn"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-cn",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_cn
-                    }));
-                }
+            if let Some((geoip_cn, geosite_cn)) = &geo.cn {
+                rules.push(json!({
+                    "rule_set": ["geosite-cn"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-cn",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_cn
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-cn"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-cn",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_cn
+                }));
             }
         }
         RoutingMode::OnlyCn => {
@@ -192,32 +217,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_cn, geosite_cn) = geo.local_paths_cn();
-                if geosite_cn.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-cn"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-cn",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_cn
-                    }));
-                }
-                if geoip_cn.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-cn"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-cn",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_cn
-                    }));
-                }
+            if let Some((geoip_cn, geosite_cn)) = &geo.cn {
+                rules.push(json!({
+                    "rule_set": ["geosite-cn"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-cn",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_cn
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-cn"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-cn",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_cn
+                }));
             }
         }
         RoutingMode::BypassIr => {
@@ -225,32 +245,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_ir, geosite_ir) = geo.local_paths_ir();
-                if geosite_ir.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-category-ir"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-category-ir",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_ir
-                    }));
-                }
-                if geoip_ir.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-ir"],
-                        "outbound": "direct"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-ir",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_ir
-                    }));
-                }
+            if let Some((geoip_ir, geosite_ir)) = &geo.ir {
+                rules.push(json!({
+                    "rule_set": ["geosite-category-ir"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-category-ir",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_ir
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-ir"],
+                    "outbound": "direct"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-ir",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_ir
+                }));
             }
         }
         RoutingMode::OnlyIr => {
@@ -258,32 +273,27 @@ fn build_route(routing_mode: &RoutingMode, dns_strategy: DnsStrategy) -> (Value,
                 "ip_is_private": true,
                 "outbound": "direct"
             }));
-            if let Ok(geo) = crate::infra::geo::GeoManager::new() {
-                let (geoip_ir, geosite_ir) = geo.local_paths_ir();
-                if geosite_ir.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geosite-category-ir"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geosite-category-ir",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geosite_ir
-                    }));
-                }
-                if geoip_ir.exists() {
-                    rules.push(json!({
-                        "rule_set": ["geoip-ir"],
-                        "outbound": "proxy"
-                    }));
-                    rule_sets.push(json!({
-                        "tag": "geoip-ir",
-                        "type": "local",
-                        "format": "binary",
-                        "path": geoip_ir
-                    }));
-                }
+            if let Some((geoip_ir, geosite_ir)) = &geo.ir {
+                rules.push(json!({
+                    "rule_set": ["geosite-category-ir"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geosite-category-ir",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geosite_ir
+                }));
+                rules.push(json!({
+                    "rule_set": ["geoip-ir"],
+                    "outbound": "proxy"
+                }));
+                rule_sets.push(json!({
+                    "tag": "geoip-ir",
+                    "type": "local",
+                    "format": "binary",
+                    "path": geoip_ir
+                }));
             }
         }
     }
@@ -396,7 +406,7 @@ mod tests {
     fn generated_config_has_required_keys() {
         let profile = test_profile();
         let settings = Settings::default();
-        let config = generate_config(&profile, &settings).unwrap();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
 
         assert!(config.get("log").is_some());
         assert!(config.get("dns").is_some());
@@ -410,7 +420,7 @@ mod tests {
     fn generated_config_global_final_is_proxy() {
         let profile = test_profile();
         let settings = Settings::default();
-        let config = generate_config(&profile, &settings).unwrap();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
         let route = config.get("route").unwrap();
         assert_eq!(route["final"].as_str().unwrap(), "proxy");
     }
@@ -422,7 +432,7 @@ mod tests {
             routing_mode: RoutingMode::OnlyRu,
             ..Default::default()
         };
-        let config = generate_config(&profile, &settings).unwrap();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
         let route = config.get("route").unwrap();
         assert_eq!(route["final"].as_str().unwrap(), "direct");
     }
@@ -507,7 +517,11 @@ mod tests {
 
     #[test]
     fn build_route_global_has_basic_rules() {
-        let (route, rule_sets) = build_route(&RoutingMode::Global, DnsStrategy::OnlyIpv4);
+        let (route, rule_sets) = build_route(
+            &RoutingMode::Global,
+            DnsStrategy::OnlyIpv4,
+            &GeoAvailability::all(),
+        );
         assert!(rule_sets.is_empty());
         let rules = route["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 3); // ipv6 reject, dns hijack, direct cidr
@@ -516,7 +530,11 @@ mod tests {
 
     #[test]
     fn build_route_only_ru_has_private_rule_and_final_direct() {
-        let (route, _rule_sets) = build_route(&RoutingMode::OnlyRu, DnsStrategy::PreferIpv4);
+        let (route, _rule_sets) = build_route(
+            &RoutingMode::OnlyRu,
+            DnsStrategy::PreferIpv4,
+            &GeoAvailability::all(),
+        );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
         assert_eq!(route["final"], "direct");
@@ -529,14 +547,18 @@ mod tests {
             routing_mode: RoutingMode::OnlyCn,
             ..Default::default()
         };
-        let config = generate_config(&profile, &settings).unwrap();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
         let route = config.get("route").unwrap();
         assert_eq!(route["final"].as_str().unwrap(), "direct");
     }
 
     #[test]
     fn build_route_bypass_cn_has_private_rule() {
-        let (route, _rule_sets) = build_route(&RoutingMode::BypassCn, DnsStrategy::PreferIpv4);
+        let (route, _rule_sets) = build_route(
+            &RoutingMode::BypassCn,
+            DnsStrategy::PreferIpv4,
+            &GeoAvailability::all(),
+        );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
         assert_eq!(route["final"], "proxy");
@@ -544,7 +566,11 @@ mod tests {
 
     #[test]
     fn build_route_only_cn_has_private_rule_and_final_direct() {
-        let (route, _rule_sets) = build_route(&RoutingMode::OnlyCn, DnsStrategy::PreferIpv4);
+        let (route, _rule_sets) = build_route(
+            &RoutingMode::OnlyCn,
+            DnsStrategy::PreferIpv4,
+            &GeoAvailability::all(),
+        );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
         assert_eq!(route["final"], "direct");

@@ -276,7 +276,7 @@ mod tests {
     use super::*;
     use crate::app::model::{ConnectionState, Overlay};
     use crate::config::profile::{Profile, Protocol};
-    use crate::test_helpers::{buffer_to_string, ensure_fixed_geo, model_with_profiles};
+    use crate::test_helpers::{buffer_to_string, model_with_profiles};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -360,7 +360,6 @@ mod tests {
 
     #[test]
     fn draw_main_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![Profile::new(
             "Alpha".to_string(),
             Protocol::Vless,
@@ -368,6 +367,7 @@ mod tests {
             443,
             "u1".to_string(),
         )]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.logs.push_back("log line 1".to_string());
         model.logs.push_back("log line 2".to_string());
         model.connection = ConnectionState::Connected;
@@ -377,15 +377,14 @@ mod tests {
 
     #[test]
     fn draw_help_overlay_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::Help;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 40));
     }
 
     #[test]
     fn draw_confirm_delete_overlay_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![Profile::new(
             "Alpha".to_string(),
             Protocol::Vless,
@@ -393,14 +392,15 @@ mod tests {
             443,
             "u1".to_string(),
         )]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::ConfirmDelete;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
 
     #[test]
     fn draw_error_overlay_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::Error;
         model.status = crate::app::model::AppStatus::Error("something went wrong".to_string());
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
@@ -408,8 +408,8 @@ mod tests {
 
     #[test]
     fn draw_routing_mode_overlay_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.config.settings.geo_region = Some(crate::config::profile::GeoRegion::Ru);
         model.overlay = Overlay::RoutingMode;
         model.routing_selected = 2;
@@ -418,8 +418,8 @@ mod tests {
 
     #[test]
     fn draw_geo_region_overlay_snapshot() {
-        ensure_fixed_geo();
         let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::GeoRegions;
         model.geo_region_selected = 1;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));

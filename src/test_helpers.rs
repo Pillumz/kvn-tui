@@ -19,11 +19,6 @@ pub fn buffer_to_string(buffer: &Buffer) -> String {
         .join("\n")
 }
 
-/// Ensure geo metadata exists with a fixed date so that StatusBar snapshots are deterministic.
-pub fn ensure_fixed_geo() {
-    crate::infra::geo::set_test_last_updated(Some("2026-05-31 13:41".to_string()));
-}
-
 /// Generate a small set of sample profiles for unit tests.
 pub fn sample_profiles() -> Vec<Profile> {
     vec![

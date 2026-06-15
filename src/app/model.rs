@@ -77,6 +77,7 @@ pub struct Model {
     pub geo_updating: bool,
     pub needs_redraw: bool,
     pub should_quit: bool,
+    pub geo_last_updated: Option<String>,
 }
 
 impl Model {
@@ -89,15 +90,11 @@ impl Model {
         self.log_scroll = self.logs.len().saturating_sub(1);
     }
 
-    /// Set application status and also log it to the logs panel.
-    pub fn set_status_and_log(&mut self, status: AppStatus) {
+    /// Set application status and also push it to the in-memory logs panel.
+    /// This method is side-effect-free: it does not write to disk.
+    pub fn set_status(&mut self, status: AppStatus) {
         let text = status.text();
         if !text.is_empty() {
-            let level = match &status {
-                AppStatus::Info(_) => "INFO",
-                AppStatus::Error(_) => "ERROR",
-            };
-            crate::services::log_tailer::append_app_log(level, text);
             self.push_log(text.to_string());
         }
         self.status = status;
@@ -140,6 +137,10 @@ impl Model {
             status = AppStatus::Info("Press ? for help".to_string());
         }
 
+        let geo_last_updated = crate::infra::geo::GeoManager::new()
+            .ok()
+            .and_then(|g| g.last_updated());
+
         let mut model = Self {
             overlay: Overlay::None,
             connection,
@@ -155,6 +156,7 @@ impl Model {
             geo_updating: false,
             needs_redraw: false,
             should_quit: false,
+            geo_last_updated,
         };
         if model.config.settings.geo_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -162,7 +164,7 @@ impl Model {
         if status.text() == "Press ? for help" {
             model.status = status;
         } else {
-            model.set_status_and_log(status);
+            model.set_status(status);
         }
         Ok(model)
     }
@@ -171,6 +173,10 @@ impl Model {
     /// after it reloads profiles.json independently of the daemon).
     pub fn from_config(config: Config) -> Self {
         let selected = config.resolve_selected();
+        let geo_last_updated = crate::infra::geo::GeoManager::new()
+            .ok()
+            .and_then(|g| g.last_updated());
+
         let mut model = Self {
             overlay: Overlay::None,
             connection: ConnectionState::Idle,
@@ -186,6 +192,7 @@ impl Model {
             geo_updating: false,
             needs_redraw: false,
             should_quit: false,
+            geo_last_updated,
         };
         if model.config.settings.geo_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -294,6 +301,7 @@ impl Model {
             geo_updating: false,
             needs_redraw: false,
             should_quit: false,
+            geo_last_updated: None,
         }
     }
 }
@@ -405,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn set_status_and_log_clears_error_and_mode() {
+    fn set_status_clears_error_and_mode() {
         let mut model = model_with_profiles(vec![]);
         model.overlay = Overlay::Error;
         model.status = AppStatus::Error("oops".into());
@@ -533,21 +541,21 @@ mod tests {
     }
 
     #[test]
-    fn set_status_and_log_logs_plain_text() {
+    fn set_status_logs_plain_text() {
         let mut model = Model::test_new(Config::default());
-        model.set_status_and_log(AppStatus::Info("hello".into()));
+        model.set_status(AppStatus::Info("hello".into()));
         assert_eq!(model.status.text(), "hello");
         assert_eq!(model.logs.back().unwrap(), "hello");
 
-        model.set_status_and_log(AppStatus::Error("oops".into()));
+        model.set_status(AppStatus::Error("oops".into()));
         assert_eq!(model.status.text(), "oops");
         assert_eq!(model.logs.back().unwrap(), "oops");
     }
 
     #[test]
-    fn set_status_and_log_does_not_log_empty() {
+    fn set_status_does_not_log_empty() {
         let mut model = Model::test_new(Config::default());
-        model.set_status_and_log(AppStatus::Info("".into()));
+        model.set_status(AppStatus::Info("".into()));
         assert!(model.logs.is_empty());
     }
 }

@@ -89,12 +89,6 @@ impl GeoManager {
 
     /// Return a human-readable string of the last update time, or None.
     pub fn last_updated(&self) -> Option<String> {
-        #[cfg(test)]
-        {
-            if let Some(override_val) = TEST_LAST_UPDATED.lock().unwrap().clone() {
-                return override_val;
-            }
-        }
         let meta = self.load_metadata().ok()?;
         meta.updated_at
             .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
@@ -254,7 +248,11 @@ impl GeoManager {
             if geosite_need {
                 parts.push(format!("geosite-{}", region.as_str()));
             }
-            Ok(GeoResult::Updated(parts))
+            let last_updated = self.last_updated();
+            Ok(GeoResult::Updated {
+                parts,
+                last_updated,
+            })
         } else {
             Ok(GeoResult::UpToDate)
         }
@@ -339,15 +337,6 @@ impl GeoManager {
             .with_context(|| format!("Failed to rename {:?} -> {:?}", temp, dest))?;
         Ok(())
     }
-}
-
-#[cfg(test)]
-static TEST_LAST_UPDATED: std::sync::Mutex<Option<Option<String>>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-/// Override `GeoManager::last_updated` for tests.
-pub fn set_test_last_updated(value: Option<String>) {
-    *TEST_LAST_UPDATED.lock().unwrap() = Some(value);
 }
 
 #[cfg(test)]

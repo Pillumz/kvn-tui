@@ -78,6 +78,7 @@ mod tests {
 
     #[test]
     fn app_log_path_is_not_empty_and_in_config_dir() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let path = app_log_path();
         assert!(!path.as_os_str().is_empty());
         assert!(path.starts_with(config_dir().unwrap()));

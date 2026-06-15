@@ -15,4 +15,9 @@ pub enum Effect {
     PasteClipboard,
     BroadcastState,
     Quit,
+    AppendAppLog {
+        level: String,
+        message: String,
+    },
+    ReloadConfig,
 }

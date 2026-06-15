@@ -1,5 +1,5 @@
 use crate::app::effect::Effect;
-use crate::app::model::{ConnectionState, Model, Overlay};
+use crate::app::model::{AppStatus, ConnectionState, Model, Overlay};
 use crate::app::msg::{GeoResult, Msg};
 use crate::config::profile::{GeoRegion, RoutingMode};
 #[cfg(test)]
@@ -15,19 +15,24 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::GeoUpdated(result) => handle_geo_result(model, result),
         Msg::SystemResumed => {
             if model.connection == ConnectionState::Connected {
-                model.set_status_and_log(crate::app::model::AppStatus::Info(
-                    "Resumed — reconnecting…".into(),
-                ));
+                let log_effect = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info("Resumed — reconnecting…".into()),
+                );
                 let profile = model.selected_profile().cloned();
                 let settings = model.config.settings.clone();
-                profile
+                let mut effects = profile
                     .map(|p| {
                         vec![Effect::Connect {
                             profile: p,
                             settings,
                         }]
                     })
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                if let Some(e) = log_effect {
+                    effects.push(e);
+                }
+                effects
             } else {
                 vec![]
             }
@@ -41,10 +46,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
                 let profile_id = profile.id;
                 let profile_name = profile.name.clone();
                 model.active_profile_id = Some(profile_id);
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Connected to {}",
-                    profile_name
-                )));
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Connected to {}", profile_name)),
+                ) {
+                    effects.push(e);
+                }
                 // Persist last connected profile for auto-connect on next startup.
                 if model.config.settings.last_connected_profile != Some(profile_id) {
                     model.config.settings.last_connected_profile = Some(profile_id);
@@ -56,11 +63,15 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::ConnectFailed(err) => {
             model.connection = ConnectionState::Idle;
             model.overlay = Overlay::Error;
-            model.set_status_and_log(crate::app::model::AppStatus::Error(format!(
-                "Connection failed: {}",
-                err
-            )));
-            vec![Effect::BroadcastState]
+            let log_effect = set_status(
+                model,
+                crate::app::model::AppStatus::Error(format!("Connection failed: {}", err)),
+            );
+            let mut effects = vec![Effect::BroadcastState];
+            if let Some(e) = log_effect {
+                effects.push(e);
+            }
+            effects
         }
 
         Msg::Resize => {
@@ -69,6 +80,52 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         }
         Msg::IpcCommand(cmd) => handle_ipc_command(model, cmd),
         Msg::StateUpdate(_) => vec![],
+        Msg::ConfigReloaded(result) => handle_config_reloaded(model, result),
+    }
+}
+
+/// Set the application status (pure, in-memory) and return an effect that
+/// appends the same message to the on-disk log file.
+fn set_status(model: &mut Model, status: AppStatus) -> Option<Effect> {
+    let text = status.text();
+    let effect = if text.is_empty() {
+        None
+    } else {
+        let level = match &status {
+            AppStatus::Info(_) => "INFO",
+            AppStatus::Error(_) => "ERROR",
+        };
+        Some(Effect::AppendAppLog {
+            level: level.to_string(),
+            message: text.to_string(),
+        })
+    };
+    model.set_status(status);
+    effect
+}
+
+fn handle_config_reloaded(
+    model: &mut Model,
+    result: Result<crate::config::profile::Config, String>,
+) -> Vec<Effect> {
+    match result {
+        Ok(config) => {
+            model.selected = config.resolve_selected();
+            model.config = config;
+            let mut effects = vec![Effect::BroadcastState];
+            if let Some(e) = set_status(model, AppStatus::Info("Profiles reloaded".into())) {
+                effects.push(e);
+            }
+            effects
+        }
+        Err(e) => {
+            let mut effects = vec![Effect::BroadcastState];
+            if let Some(e) = set_status(model, AppStatus::Error(format!("Failed to reload: {}", e)))
+            {
+                effects.push(e);
+            }
+            effects
+        }
     }
 }
 
@@ -111,6 +168,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let mut effects = Vec::new();
     match key.code {
         // Navigation
         KeyCode::Char('j') | KeyCode::Down => {
@@ -129,15 +187,20 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         // Actions
         KeyCode::Enter => {
             if let Some(profile) = model.selected_profile() {
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Connecting to {}…",
-                    profile.name
-                )));
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Connecting to {}…", profile.name)),
+                ) {
+                    effects.push(e);
+                }
                 model.connection = ConnectionState::Connecting;
-            } else {
-                model.set_status_and_log(crate::app::model::AppStatus::Info(
+            } else if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info(
                     "No profiles. Press p to paste or e to edit.".into(),
-                ));
+                ),
+            ) {
+                effects.push(e);
             }
         }
         KeyCode::Char('p') => {
@@ -156,10 +219,14 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('u') if !model.geo_updating => {
             model.geo_updating = true;
-            model.set_status_and_log(crate::app::model::AppStatus::Info(
-                "Checking for geo updates...".to_string(),
-            ));
-            return vec![Effect::DownloadGeo];
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info("Checking for geo updates...".to_string()),
+            ) {
+                effects.push(e);
+            }
+            effects.push(Effect::DownloadGeo);
+            return effects;
         }
         KeyCode::Char('o') => {
             model.overlay = Overlay::GeoRegions;
@@ -176,10 +243,15 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('r') if model.connection == ConnectionState::Connected => {
             if let Some(profile) = model.selected_profile() {
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Reconnecting to {}…",
-                    profile.name
-                )));
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!(
+                        "Reconnecting to {}…",
+                        profile.name
+                    )),
+                ) {
+                    effects.push(e);
+                }
             }
             model.connection = ConnectionState::Connecting;
         }
@@ -189,11 +261,17 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('a') => {
             let new_val = !model.config.settings.auto_connect;
             model.config.settings.auto_connect = new_val;
-            model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                "Auto-connect {}",
-                if new_val { "enabled" } else { "disabled" }
-            )));
-            return vec![Effect::SaveConfig];
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info(format!(
+                    "Auto-connect {}",
+                    if new_val { "enabled" } else { "disabled" }
+                )),
+            ) {
+                effects.push(e);
+            }
+            effects.push(Effect::SaveConfig);
+            return effects;
         }
 
         // Help
@@ -201,7 +279,7 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 
         _ => {}
     }
-    vec![]
+    effects
 }
 
 fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
@@ -209,13 +287,16 @@ fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('y') | KeyCode::Enter => {
             let name = model.selected_profile().map(|p| p.name.clone());
             model.delete_selected();
+            let mut effects = vec![Effect::SaveConfig];
             if let Some(name) = name {
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Profile '{}' deleted",
-                    name
-                )));
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Profile '{}' deleted", name)),
+                ) {
+                    effects.push(e);
+                }
             }
-            return vec![Effect::SaveConfig];
+            return effects;
         }
         KeyCode::Char('n') | KeyCode::Esc => {
             model.overlay = Overlay::None;
@@ -240,22 +321,7 @@ fn handle_ipc_command(model: &mut Model, cmd: crate::app::msg::IpcCommand) -> Ve
         }
         IpcCommand::Paste { text } => handle_clipboard_text(model, &text),
         IpcCommand::ReloadConfig => {
-            match crate::config::load_config() {
-                Ok(config) => {
-                    model.selected = config.resolve_selected();
-                    model.config = config;
-                    model.set_status_and_log(crate::app::model::AppStatus::Info(
-                        "Profiles reloaded".into(),
-                    ));
-                }
-                Err(e) => {
-                    model.set_status_and_log(crate::app::model::AppStatus::Error(format!(
-                        "Failed to reload: {}",
-                        e
-                    )));
-                }
-            }
-            vec![]
+            vec![Effect::ReloadConfig]
         }
         IpcCommand::Quit => vec![Effect::Quit],
     };
@@ -304,17 +370,20 @@ fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 let changed = model.config.settings.routing_mode != mode;
                 model.config.settings.routing_mode = mode;
                 model.overlay = Overlay::None;
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Routing mode: {}",
-                    mode.as_str()
-                )));
+                let mut effects = vec![Effect::SaveConfig];
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Routing mode: {}", mode.as_str())),
+                ) {
+                    effects.push(e);
+                }
 
-                let effects = vec![Effect::SaveConfig];
                 if changed && model.connection == ConnectionState::Connected {
                     model.connection = ConnectionState::Connecting;
                     let text = format!("Mode changed to {} — reconnecting", mode.as_str());
-                    crate::services::log_tailer::append_app_log("INFO", &text);
-                    model.logs.push_back(text);
+                    if let Some(e) = set_status(model, crate::app::model::AppStatus::Info(text)) {
+                        effects.push(e);
+                    }
                 }
                 return effects;
             }
@@ -352,18 +421,24 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 let changed = model.config.settings.geo_region != Some(region);
                 model.config.settings.geo_region = Some(region);
                 model.overlay = Overlay::None;
-                model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                    "Geo region: {}",
-                    region.as_str()
-                )));
+                let mut effects = vec![Effect::SaveConfig];
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Geo region: {}", region.as_str())),
+                ) {
+                    effects.push(e);
+                }
 
                 // Reset routing mode if it is no longer available.
                 let available = RoutingMode::available(Some(region));
                 if !available.contains(&model.config.settings.routing_mode) {
                     model.config.settings.routing_mode = RoutingMode::Global;
-                    model.set_status_and_log(crate::app::model::AppStatus::Info(
-                        "Routing mode reset to Global".into(),
-                    ));
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info("Routing mode reset to Global".into()),
+                    ) {
+                        effects.push(e);
+                    }
                 }
 
                 // Trigger auto-connect immediately after picking a region
@@ -378,15 +453,19 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                         model.selected = idx;
                         model.connection = ConnectionState::Connecting;
                         if let Some(profile) = model.config.profiles.get(idx) {
-                            model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                                "Auto-connecting to {}…",
-                                profile.name
-                            )));
+                            if let Some(e) = set_status(
+                                model,
+                                crate::app::model::AppStatus::Info(format!(
+                                    "Auto-connecting to {}…",
+                                    profile.name
+                                )),
+                            ) {
+                                effects.push(e);
+                            }
                         }
                     }
                 }
 
-                let effects = vec![Effect::SaveConfig];
                 if changed && model.connection == ConnectionState::Connected {
                     model.connection = ConnectionState::Connecting;
                     model.logs.push_back("Region changed — reconnecting".into());
@@ -403,28 +482,38 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
-    match crate::infra::clipboard::parse_share_link(text) {
+    match crate::config::profile::parse_share_link(text) {
         Ok(profile) => {
             if model.has_duplicate(&profile) {
-                model.set_status_and_log(crate::app::model::AppStatus::Error(
-                    "Profile already exists".into(),
-                ));
-                return vec![];
+                let mut effects = Vec::new();
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Error("Profile already exists".into()),
+                ) {
+                    effects.push(e);
+                }
+                return effects;
             }
             let name = profile.name.clone();
             model.add_profile(profile);
-            model.set_status_and_log(crate::app::model::AppStatus::Info(format!(
-                "Pasted profile: {}",
-                name
-            )));
-            vec![Effect::SaveConfig]
+            let mut effects = vec![Effect::SaveConfig];
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info(format!("Pasted profile: {}", name)),
+            ) {
+                effects.push(e);
+            }
+            effects
         }
         Err(e) => {
-            model.set_status_and_log(crate::app::model::AppStatus::Error(format!(
-                "Invalid URI: {}",
-                e
-            )));
-            vec![]
+            let mut effects = Vec::new();
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Error(format!("Invalid URI: {}", e)),
+            ) {
+                effects.push(e);
+            }
+            effects
         }
     }
 }
@@ -432,32 +521,50 @@ fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
 fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
     model.geo_updating = false;
     let mut effects = match result {
-        GeoResult::Updated(parts) => {
+        GeoResult::Updated {
+            parts,
+            last_updated,
+        } => {
+            model.geo_last_updated = last_updated;
+            let mut log_effects = Vec::new();
             for part in &parts {
                 let text = format!("Updated: {}", part);
-                crate::services::log_tailer::append_app_log("INFO", &text);
+                log_effects.push(Effect::AppendAppLog {
+                    level: "INFO".to_string(),
+                    message: text.clone(),
+                });
                 model.logs.push_back(text);
             }
-            model.set_status_and_log(crate::app::model::AppStatus::Info(
-                "Geo databases updated".into(),
-            ));
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info("Geo databases updated".into()),
+            ) {
+                log_effects.push(e);
+            }
             if model.connection == ConnectionState::Connected {
                 model
                     .logs
                     .push_back("Reconnecting to apply new geo databases".into());
                 model.connection = ConnectionState::Connecting;
             }
-            vec![]
+            log_effects
         }
         GeoResult::UpToDate => {
-            model.set_status_and_log(crate::app::model::AppStatus::Info(
-                "Geo databases are up to date".into(),
-            ));
-            vec![]
+            let mut effects = Vec::new();
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info("Geo databases are up to date".into()),
+            ) {
+                effects.push(e);
+            }
+            effects
         }
         GeoResult::Error(err) => {
-            model.set_status_and_log(crate::app::model::AppStatus::Error(err));
-            vec![]
+            let mut effects = Vec::new();
+            if let Some(e) = set_status(model, crate::app::model::AppStatus::Error(err)) {
+                effects.push(e);
+            }
+            effects
         }
     };
     effects.push(Effect::BroadcastState);
@@ -469,6 +576,20 @@ mod tests {
     use super::*;
     use crate::test_helpers::*;
     use crossterm::event::KeyCode;
+
+    fn app_log_info(message: &str) -> Effect {
+        Effect::AppendAppLog {
+            level: "INFO".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    fn app_log_error(message: &str) -> Effect {
+        Effect::AppendAppLog {
+            level: "ERROR".to_string(),
+            message: message.to_string(),
+        }
+    }
 
     #[test]
     fn handle_event_non_key_is_noop() {
@@ -518,7 +639,7 @@ mod tests {
         )]);
         let effects = handle_main(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.connection, ConnectionState::Connecting);
-        assert!(effects.is_empty());
+        assert_eq!(effects, vec![app_log_info("Connecting to A…")]);
     }
 
     #[test]
@@ -526,7 +647,10 @@ mod tests {
         let mut model = model_with_profiles(vec![]);
         let effects = handle_main(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.overlay, Overlay::None);
-        assert!(effects.is_empty());
+        assert_eq!(
+            effects,
+            vec![app_log_info("No profiles. Press p to paste or e to edit.")]
+        );
     }
 
     #[test]
@@ -559,6 +683,47 @@ mod tests {
         let mut model = model_with_profiles(vec![]);
         let effects = handle_ipc_command(&mut model, crate::app::msg::IpcCommand::Attach);
         assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn ipc_command_reload_config_returns_effect() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(&mut model, crate::app::msg::IpcCommand::ReloadConfig);
+        assert_eq!(effects, vec![Effect::ReloadConfig, Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn config_reloaded_updates_model() {
+        let mut model = model_with_profiles(vec![Profile::new(
+            "A".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        model.config.settings.geo_region = Some(GeoRegion::Ru);
+        let config = model.config.clone();
+        let effects = update(&mut model, Msg::ConfigReloaded(Ok(config)));
+        assert_eq!(
+            effects,
+            vec![Effect::BroadcastState, app_log_info("Profiles reloaded")]
+        );
+    }
+
+    #[test]
+    fn config_reloaded_error_updates_status() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = update(
+            &mut model,
+            Msg::ConfigReloaded(Err("parse error".to_string())),
+        );
+        assert_eq!(
+            effects,
+            vec![
+                Effect::BroadcastState,
+                app_log_error("Failed to reload: parse error")
+            ]
+        );
     }
 
     #[test]
@@ -622,7 +787,10 @@ mod tests {
         let effects = handle_confirm_delete(&mut model, key('y'));
         assert!(model.config.profiles.is_empty());
         assert_eq!(model.overlay, Overlay::None);
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![Effect::SaveConfig, app_log_info("Profile 'A' deleted")]
+        );
     }
 
     #[test]
@@ -675,7 +843,10 @@ mod tests {
         assert_eq!(model.config.settings.routing_mode, RoutingMode::OnlyRu);
         assert_eq!(model.overlay, Overlay::None);
         assert!(model.status.text().contains("Only RU"));
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![Effect::SaveConfig, app_log_info("Routing mode: Only RU")]
+        );
     }
 
     #[test]
@@ -723,7 +894,10 @@ mod tests {
         assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Cn));
         assert_eq!(model.overlay, Overlay::None);
         assert!(model.status.text().contains("cn"));
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![Effect::SaveConfig, app_log_info("Geo region: cn")]
+        );
     }
 
     #[test]
@@ -759,7 +933,14 @@ mod tests {
         let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Global));
         assert_eq!(model.config.settings.routing_mode, RoutingMode::Global);
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Geo region: global"),
+                app_log_info("Routing mode reset to Global")
+            ]
+        );
     }
 
     #[test]
@@ -783,7 +964,14 @@ mod tests {
         assert_eq!(model.connection, ConnectionState::Connecting);
         assert_eq!(model.selected, 0);
         assert!(model.status.text().contains("Auto-connecting"));
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Geo region: ru"),
+                app_log_info("Auto-connecting to Auto…")
+            ]
+        );
     }
 
     #[test]
@@ -792,10 +980,20 @@ mod tests {
         model.geo_updating = true;
         let effects = update(
             &mut model,
-            Msg::GeoUpdated(GeoResult::Updated(vec!["geoip".into()])),
+            Msg::GeoUpdated(GeoResult::Updated {
+                parts: vec!["geoip".into()],
+                last_updated: Some("2026-05-31 13:41".to_string()),
+            }),
         );
         assert!(!model.geo_updating);
-        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert_eq!(
+            effects,
+            vec![
+                app_log_info("Updated: geoip"),
+                app_log_info("Geo databases updated"),
+                Effect::BroadcastState
+            ]
+        );
     }
 
     #[test]
@@ -804,7 +1002,13 @@ mod tests {
         model.geo_updating = true;
         let effects = update(&mut model, Msg::GeoUpdated(GeoResult::UpToDate));
         assert!(!model.geo_updating);
-        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert_eq!(
+            effects,
+            vec![
+                app_log_info("Geo databases are up to date"),
+                Effect::BroadcastState
+            ]
+        );
     }
 
     #[test]
@@ -816,7 +1020,10 @@ mod tests {
             Msg::GeoUpdated(GeoResult::Error("net fail".into())),
         );
         assert!(!model.geo_updating);
-        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert_eq!(
+            effects,
+            vec![app_log_error("net fail"), Effect::BroadcastState]
+        );
     }
 
     #[test]
@@ -880,7 +1087,7 @@ mod tests {
         model.connection = ConnectionState::Connected;
         model.overlay = Overlay::None;
         let effects = handle_key(&mut model, KeyEvent::from(KeyCode::Enter));
-        assert!(effects.is_empty());
+        assert_eq!(effects, vec![app_log_info("Connecting to A…")]);
         assert_eq!(model.connection, ConnectionState::Connecting);
     }
 
@@ -896,7 +1103,7 @@ mod tests {
         model.connection = ConnectionState::Connected;
         model.overlay = Overlay::None;
         let effects = handle_key(&mut model, key('r'));
-        assert!(effects.is_empty());
+        assert_eq!(effects, vec![app_log_info("Reconnecting to A…")]);
         assert_eq!(model.connection, ConnectionState::Connecting);
     }
 
@@ -916,7 +1123,13 @@ mod tests {
         let effects = update(&mut model, Msg::ConnectFailed("timeout".into()));
         assert_eq!(model.overlay, Overlay::Error);
         assert_eq!(model.connection, ConnectionState::Idle);
-        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::BroadcastState,
+                app_log_error("Connection failed: timeout")
+            ]
+        );
     }
 
     #[test]
@@ -959,7 +1172,14 @@ mod tests {
             model.config.settings.last_connected_profile,
             Some(model.config.profiles[0].id)
         );
-        assert_eq!(effects, vec![Effect::WriteState, Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::WriteState,
+                app_log_info("Connected to A"),
+                Effect::SaveConfig
+            ]
+        );
     }
 
     #[test]
@@ -969,12 +1189,18 @@ mod tests {
         let effects = handle_main(&mut model, key('a'));
         assert!(model.config.settings.auto_connect);
         assert!(model.status.text().contains("enabled"));
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![app_log_info("Auto-connect enabled"), Effect::SaveConfig]
+        );
 
         let effects = handle_main(&mut model, key('a'));
         assert!(!model.config.settings.auto_connect);
         assert!(model.status.text().contains("disabled"));
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![app_log_info("Auto-connect disabled"), Effect::SaveConfig]
+        );
     }
 
     #[test]
@@ -985,13 +1211,16 @@ mod tests {
         // First paste succeeds
         let effects = handle_clipboard_text(&mut model, uri);
         assert_eq!(model.config.profiles.len(), 1);
-        assert_eq!(effects, vec![Effect::SaveConfig]);
+        assert_eq!(
+            effects,
+            vec![Effect::SaveConfig, app_log_info("Pasted profile: Test")]
+        );
         assert!(model.status.text().contains("Pasted profile"));
 
         // Second paste with same UUID fails
         let effects = handle_clipboard_text(&mut model, uri);
         assert_eq!(model.config.profiles.len(), 1);
-        assert!(effects.is_empty());
+        assert_eq!(effects, vec![app_log_error("Profile already exists")]);
         assert!(model.status.is_error());
         assert!(model.status.text().contains("already exists"));
     }

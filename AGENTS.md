@@ -203,6 +203,22 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 
 ---
 
+## Side-effect-free Boundaries
+
+The TEA update function (`app::update::update`) must remain free of I/O, threads, and system calls. Side effects are declared as `Effect` values and executed by the daemon runtime.
+
+Rules of thumb:
+- `app::update::update(model, msg) -> Vec<Effect>` must not call functions from `services`, `infra`, `config::load_config`, or perform any file/network/process I/O.
+- `Model::set_status` is pure (mutates only in-memory state). Any message that should also be persisted to the application log must return `Effect::AppendAppLog`.
+- `Model::new` is allowed to perform initialization I/O (load config, read `state.json`, etc.).
+- `singbox::config::generate_config` is pure: it receives geo file availability (`GeoAvailability`) from the caller and does not touch the file system.
+- `ui::widgets::StatusBar::render` reads only `Model` fields; it does not call `GeoManager` or access files.
+- The daemon (`daemon::execute_daemon_effect`) is the sole executor of `Effect` values. It may perform I/O, spawn threads, and mutate `Model` where appropriate.
+
+If you need to add a new side effect from `update`, add a new `Effect` variant and implement it in `daemon::execute_daemon_effect`.
+
+---
+
 ## Configuration Paths
 
 | Resource | Path |

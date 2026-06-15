@@ -123,7 +123,7 @@ fn execute_daemon_effect(
             model.connection = ConnectionState::Idle;
             model.active_profile_id = None;
             model.singbox_pid = None;
-            model.set_status_and_log(AppStatus::Info("Disconnected".into()));
+            model.set_status(AppStatus::Info("Disconnected".into()));
             model.overlay = Overlay::None;
             crate::services::waybar::write_state(model);
         }
@@ -151,7 +151,7 @@ fn execute_daemon_effect(
         }
         Effect::SaveConfig => {
             if let Err(e) = model.save() {
-                model.set_status_and_log(AppStatus::Error(format!("Failed to save config: {}", e)));
+                model.set_status(AppStatus::Error(format!("Failed to save config: {}", e)));
             }
         }
         Effect::PasteClipboard => {
@@ -164,6 +164,22 @@ fn execute_daemon_effect(
         }
         Effect::OpenEditor(_) => {
             // Editor is a TUI-local operation; daemon ignores it.
+        }
+        Effect::AppendAppLog { level, message } => {
+            crate::services::log_tailer::append_app_log(&level, &message);
+        }
+        Effect::ReloadConfig => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let result = crate::config::load_config()
+                    .map_err(|e| e.to_string())
+                    .map(|c| c.validate().map(|_| c).map_err(|e| e.to_string()));
+                let result = match result {
+                    Ok(Ok(c)) => Ok(c),
+                    Ok(Err(e)) | Err(e) => Err(e),
+                };
+                let _ = tx.send(Msg::ConfigReloaded(result));
+            });
         }
     }
     Ok(())
@@ -180,6 +196,7 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         routing_selected: model.routing_selected,
         geo_region_selected: model.geo_region_selected,
         geo_updating: model.geo_updating,
+        geo_last_updated: model.geo_last_updated.clone(),
         overlay: model.overlay,
         profiles: model.config.profiles.clone(),
         settings: model.config.settings.clone(),

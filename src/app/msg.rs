@@ -13,11 +13,15 @@ pub enum Msg {
 
     IpcCommand(IpcCommand),
     StateUpdate(StateSnapshot),
+    ConfigReloaded(Result<crate::config::profile::Config, String>),
 }
 
 #[derive(Debug)]
 pub enum GeoResult {
-    Updated(Vec<String>),
+    Updated {
+        parts: Vec<String>,
+        last_updated: Option<String>,
+    },
     UpToDate,
     Error(String),
 }
@@ -52,6 +56,7 @@ pub struct StateSnapshot {
     pub routing_selected: usize,
     pub geo_region_selected: usize,
     pub geo_updating: bool,
+    pub geo_last_updated: Option<String>,
     pub overlay: Overlay,
     pub profiles: Vec<Profile>,
     pub settings: Settings,

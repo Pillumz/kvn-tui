@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 
 use crate::config::profile::{Profile, Settings};
 use crate::infra::process_handle::ProcessHandle;
-use crate::singbox::config::generate_config;
+use crate::singbox::config::{GeoAvailability, generate_config};
 
 fn resolve_singbox_binary() -> String {
     std::env::var("SING_BOX_PATH").unwrap_or_else(|_| "sing-box".to_string())
@@ -24,9 +24,9 @@ fn singbox_binary() -> &'static str {
 }
 
 /// Write the generated sing-box configuration to a temporary file.
-fn write_config(profile: &Profile, settings: &Settings) -> Result<PathBuf> {
+fn write_config(profile: &Profile, settings: &Settings, geo: &GeoAvailability) -> Result<PathBuf> {
     let config =
-        generate_config(profile, settings).context("Failed to generate sing-box config")?;
+        generate_config(profile, settings, geo).context("Failed to generate sing-box config")?;
     let path = crate::infra::paths::temp_singbox_config_path();
 
     if let Some(parent) = path.parent() {
@@ -56,10 +56,30 @@ fn check_config(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn collect_geo_availability() -> GeoAvailability {
+    let mut geo = GeoAvailability::default();
+    if let Ok(gm) = crate::infra::geo::GeoManager::new() {
+        let (geoip_ru, geosite_ru) = gm.local_paths();
+        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
+        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
+        if geoip_ru.exists() && geosite_ru.exists() {
+            geo.ru = Some((geoip_ru, geosite_ru));
+        }
+        if geoip_cn.exists() && geosite_cn.exists() {
+            geo.cn = Some((geoip_cn, geosite_cn));
+        }
+        if geoip_ir.exists() && geosite_ir.exists() {
+            geo.ir = Some((geoip_ir, geosite_ir));
+        }
+    }
+    geo
+}
+
 /// Start the sing-box process with the given profile.
 /// Validates config first, then spawns the process and verifies it stays alive.
 pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
-    let config_path = write_config(profile, settings)?;
+    let geo = collect_geo_availability();
+    let config_path = write_config(profile, settings, &geo)?;
 
     // Validate configuration before starting.
     check_config(&config_path)?;
@@ -128,7 +148,7 @@ mod tests {
             "uuid".to_string(),
         );
         let settings = Settings::default();
-        let path = write_config(&profile, &settings).unwrap();
+        let path = write_config(&profile, &settings, &GeoAvailability::default()).unwrap();
         assert!(path.exists());
 
         let contents = fs::read_to_string(&path).unwrap();
