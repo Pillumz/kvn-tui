@@ -160,6 +160,31 @@ fn execute_daemon_effect(
                 let _ = tx.send(Msg::GeoLastUpdated(last_updated));
             });
         }
+        Effect::DownloadGeoIfMissing => {
+            model.geo_updating = true;
+            let tx = tx.clone();
+            let region = model
+                .config
+                .settings
+                .geo_region
+                .unwrap_or(crate::config::profile::GeoRegion::Global);
+            thread::spawn(move || {
+                let result = match crate::infra::geo::GeoManager::new() {
+                    Ok(gm) => {
+                        if gm.has_databases(region) {
+                            GeoResult::UpToDate
+                        } else {
+                            match gm.update_if_needed(region) {
+                                Ok(geo_result) => geo_result,
+                                Err(e) => GeoResult::Error(e.to_string()),
+                            }
+                        }
+                    }
+                    Err(e) => GeoResult::Error(e.to_string()),
+                };
+                let _ = tx.send(Msg::GeoUpdated(result));
+            });
+        }
         Effect::WriteState => {
             crate::services::waybar::write_state(model);
         }

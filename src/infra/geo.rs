@@ -88,6 +88,25 @@ impl GeoManager {
         (geoip_ir, geosite_ir)
     }
 
+    /// Return whether local rule-set files for the given region are present.
+    pub fn has_databases(&self, region: GeoRegion) -> bool {
+        match region {
+            GeoRegion::Global => true,
+            GeoRegion::Ru => {
+                let (geoip, geosite) = self.local_paths();
+                geoip.exists() && geosite.exists()
+            }
+            GeoRegion::Cn => {
+                let (geoip, geosite) = self.local_paths_cn();
+                geoip.exists() && geosite.exists()
+            }
+            GeoRegion::Ir => {
+                let (geoip, geosite) = self.local_paths_ir();
+                geoip.exists() && geosite.exists()
+            }
+        }
+    }
+
     /// Return a human-readable string of the last update time for the given region, or None.
     pub fn last_updated(&self, region: GeoRegion) -> Option<String> {
         if matches!(region, GeoRegion::Global) {
@@ -418,6 +437,29 @@ mod tests {
         let _ = fs::remove_file(&geosite_ru);
         let _ = fs::remove_file(&geoip_cn);
         let _ = fs::remove_file(&geosite_cn);
+    }
+
+    #[test]
+    fn has_databases_reflects_file_presence() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let (geoip_ru, geosite_ru) = gm.local_paths();
+        let _ = fs::remove_file(&geoip_ru);
+        let _ = fs::remove_file(&geosite_ru);
+
+        assert!(!gm.has_databases(GeoRegion::Ru));
+        assert!(gm.has_databases(GeoRegion::Global));
+
+        fs::write(&geoip_ru, b"dummy").unwrap();
+        assert!(!gm.has_databases(GeoRegion::Ru));
+
+        fs::write(&geosite_ru, b"dummy").unwrap();
+        assert!(gm.has_databases(GeoRegion::Ru));
+
+        let _ = fs::remove_file(&geoip_ru);
+        let _ = fs::remove_file(&geosite_ru);
     }
 
     #[test]

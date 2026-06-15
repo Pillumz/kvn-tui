@@ -447,6 +447,19 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     effects.push(e);
                 }
 
+                // If the region changed and is not Global, check whether geo databases
+                // are present and download them automatically if they are missing.
+                if changed && region != GeoRegion::Global {
+                    model.geo_updating = true;
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info("Checking geo databases...".to_string()),
+                    ) {
+                        effects.push(e);
+                    }
+                    effects.push(Effect::DownloadGeoIfMissing);
+                }
+
                 // Reset routing mode if it is no longer available.
                 let available = RoutingMode::available(Some(region));
                 if !available.contains(&model.config.settings.routing_mode) {
@@ -911,13 +924,15 @@ mod tests {
         let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Cn));
         assert_eq!(model.overlay, Overlay::None);
-        assert!(model.status.text().contains("cn"));
+        assert!(model.logs.iter().any(|l| l.contains("Geo region: cn")));
         assert_eq!(
             effects,
             vec![
                 Effect::SaveConfig,
                 Effect::RefreshGeoLastUpdated,
-                app_log_info("Geo region: cn")
+                app_log_info("Geo region: cn"),
+                app_log_info("Checking geo databases..."),
+                Effect::DownloadGeoIfMissing,
             ]
         );
     }
@@ -993,6 +1008,8 @@ mod tests {
                 Effect::SaveConfig,
                 Effect::RefreshGeoLastUpdated,
                 app_log_info("Geo region: ru"),
+                app_log_info("Checking geo databases..."),
+                Effect::DownloadGeoIfMissing,
                 app_log_info("Auto-connecting to Auto…")
             ]
         );
@@ -1008,6 +1025,19 @@ mod tests {
         let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Cn));
         assert!(!effects.contains(&Effect::RefreshGeoLastUpdated));
+    }
+
+    #[test]
+    fn geo_region_global_does_not_trigger_geo_download() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_region = Some(GeoRegion::Ru);
+        model.overlay = Overlay::GeoRegions;
+        model.geo_region_selected = 3; // Global
+
+        let effects = handle_geo_region(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.config.settings.geo_region, Some(GeoRegion::Global));
+        assert!(!effects.contains(&Effect::DownloadGeoIfMissing));
+        assert!(!model.status.text().contains("Checking geo databases"));
     }
 
     #[test]
