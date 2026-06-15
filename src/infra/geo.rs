@@ -42,6 +42,25 @@ struct GeoMetadata {
     updated_at: HashMap<GeoRegion, DateTime<Local>>,
 }
 
+/// Legacy v0.11.2 metadata format with a single global `updated_at` timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct GeoMetadataLegacy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geoip_ru_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geosite_ru_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geoip_cn_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geosite_cn_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geoip_ir_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geosite_ir_etag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<DateTime<Local>>,
+}
+
 /// Manages downloading and updating geoip/geosite rule-sets for sing-box.
 pub struct GeoManager {
     geo_dir: PathBuf,
@@ -296,6 +315,40 @@ impl GeoManager {
         }
         let text = fs::read_to_string(&self.metadata_path)
             .with_context(|| format!("Failed to read {:?}", self.metadata_path))?;
+
+        // Current per-region format.
+        if let Ok(meta) = serde_json::from_str::<GeoMetadata>(&text) {
+            return Ok(meta);
+        }
+
+        // Legacy v0.11.2 format: single global `updated_at` timestamp.
+        if let Ok(legacy) = serde_json::from_str::<GeoMetadataLegacy>(&text) {
+            let mut migrated = GeoMetadata {
+                geoip_ru_etag: legacy.geoip_ru_etag,
+                geosite_ru_etag: legacy.geosite_ru_etag,
+                geoip_cn_etag: legacy.geoip_cn_etag,
+                geosite_cn_etag: legacy.geosite_cn_etag,
+                geoip_ir_etag: legacy.geoip_ir_etag,
+                geosite_ir_etag: legacy.geosite_ir_etag,
+                updated_at: HashMap::new(),
+            };
+
+            if let Some(ts) = legacy.updated_at {
+                for region in [GeoRegion::Ru, GeoRegion::Cn, GeoRegion::Ir] {
+                    if self.has_databases(region) {
+                        migrated.updated_at.insert(region, ts);
+                    }
+                }
+            }
+
+            if let Err(e) = self.save_metadata(&migrated) {
+                tracing::warn!("Failed to persist migrated geo metadata: {e}");
+            }
+
+            return Ok(migrated);
+        }
+
+        // Neither format; surface the current-format parse error.
         let meta: GeoMetadata = serde_json::from_str(&text)
             .with_context(|| format!("Failed to parse {:?}", self.metadata_path))?;
         Ok(meta)
@@ -414,6 +467,91 @@ mod tests {
         assert!(loaded.updated_at.contains_key(&GeoRegion::Ru));
         assert!(loaded.updated_at.contains_key(&GeoRegion::Cn));
         assert!(loaded.updated_at.contains_key(&GeoRegion::Ir));
+    }
+
+    #[test]
+    fn legacy_metadata_migrates_to_per_region() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+
+        let ts = Local::now();
+        let legacy = GeoMetadataLegacy {
+            geoip_ru_etag: Some("etag-ru".to_string()),
+            geosite_ru_etag: Some("etag-ru-site".to_string()),
+            updated_at: Some(ts),
+            ..Default::default()
+        };
+        fs::write(
+            &gm.metadata_path,
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        // Create RU files so the legacy timestamp is assigned to Ru region.
+        let (geoip_ru, geosite_ru) = gm.local_paths();
+        fs::write(&geoip_ru, b"dummy").unwrap();
+        fs::write(&geosite_ru, b"dummy").unwrap();
+
+        let migrated = gm.load_metadata().unwrap();
+        assert_eq!(migrated.geoip_ru_etag, Some("etag-ru".to_string()));
+        assert_eq!(migrated.geosite_ru_etag, Some("etag-ru-site".to_string()));
+        assert_eq!(migrated.updated_at.get(&GeoRegion::Ru).copied(), Some(ts));
+        assert!(!migrated.updated_at.contains_key(&GeoRegion::Cn));
+
+        // Re-reading from disk must use the new per-region format.
+        let reloaded = gm.load_metadata().unwrap();
+        assert_eq!(reloaded.updated_at.get(&GeoRegion::Ru).copied(), Some(ts));
+    }
+
+    #[test]
+    fn legacy_metadata_without_updated_at_migrates_empty() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+
+        let legacy = GeoMetadataLegacy {
+            geoip_ru_etag: Some("etag-ru".to_string()),
+            updated_at: None,
+            ..Default::default()
+        };
+        fs::write(
+            &gm.metadata_path,
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let (geoip_ru, geosite_ru) = gm.local_paths();
+        fs::write(&geoip_ru, b"dummy").unwrap();
+        fs::write(&geosite_ru, b"dummy").unwrap();
+
+        let migrated = gm.load_metadata().unwrap();
+        assert_eq!(migrated.geoip_ru_etag, Some("etag-ru".to_string()));
+        assert!(migrated.updated_at.is_empty());
+    }
+
+    #[test]
+    fn legacy_metadata_missing_files_migrates_empty() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+
+        let ts = Local::now();
+        let legacy = GeoMetadataLegacy {
+            updated_at: Some(ts),
+            ..Default::default()
+        };
+        fs::write(
+            &gm.metadata_path,
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let migrated = gm.load_metadata().unwrap();
+        assert!(migrated.updated_at.is_empty());
     }
 
     #[test]
