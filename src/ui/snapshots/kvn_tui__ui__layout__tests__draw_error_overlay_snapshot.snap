@@ -1,10 +1,11 @@
 ---
 source: src/ui/layout.rs
+assertion_line: 537
 expression: "snapshot_terminal(&model, 80, 20)"
 ---
-┌ Profiles ────────────────────────────┐┌ Logs ────────────────────────────────┐
-│Name          Protocol Address  Port  ││                                      │
-│                                      ││                                      │
+┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
+│No sources. Press p to paste a profile││                                      │
+│or subscription URL from clipboard.   ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │               ┌ Error ───────────────────────────────────────┐               │

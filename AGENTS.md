@@ -18,7 +18,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 |--------|------|----------------|
 | `cli` | `src/cli.rs` | CLI argument parsing (`--waybar-status`, `--install-omarchy`, `--version`) |
 | `app` | `src/app.rs`, `src/app/model.rs`, `src/app/msg.rs`, `src/app/update.rs`, `src/app/effect.rs` | TEA core: Model, Msg, Update, Effect — pure data, messages, business logic, side-effect declarations |
-| `model` | `src/app/model.rs` | Application state (`Model`), overlay + connection state, input state — pure data, no side effects |
+| `model` | `src/app/model.rs` | Application state (`Model`), overlay + connection state + subscription state, input state — pure data, no side effects |
 | `msg` | `src/app/msg.rs` | Message enum (`Msg`) — all external events (keys, ticks, logs, geo, resume, etc.) |
 | `update` | `src/app/update.rs` | Pure `update(model, msg) -> Vec<Effect>` — business logic, input routing, mode transitions |
 | `effect` | `src/app/effect.rs` | Effect enum — declarative description of side effects to be executed by runtime |
@@ -28,7 +28,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `test_helpers` | `src/test_helpers.rs` | Shared test utilities (e.g. `model_with_profiles`)
 | `process_handle` | `src/infra/process_handle.rs` | Wrapper around `std::process::Child` for sing-box lifecycle |
 | `ui` | `src/ui.rs`, `src/ui/layout.rs`, `src/ui/widgets.rs`, `src/ui/styles.rs`, `src/ui/nav.rs` | ratatui rendering (used by TUI client only), layout splits, widget definitions, color theme, navigation helpers |
-| `config` | `src/config.rs`, `src/config/profile.rs` | JSON config I/O, profile struct definitions |
+| `config` | `src/config.rs`, `src/config/profile.rs` | JSON config I/O, profile and subscription struct definitions |
 | `singbox` | `src/singbox.rs`, `src/singbox/config.rs`, `src/singbox/runner.rs` | Process lifecycle: write temp config, run `sing-box check`, spawn `sing-box run`, kill on disconnect |
 | `clipboard` | `src/infra/clipboard.rs` | Wayland clipboard integration (`wl-paste`), VLESS share link parsing (`vless://`) |
 | `geo` | `src/infra/geo.rs` | Download and cache geoip/geosite rule-sets for sing-box routing |
@@ -37,7 +37,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `waybar` | `src/services/waybar.rs` | Read/write `state.json` for waybar integration and crash recovery |
 | `suspend` | `src/services/suspend.rs` | D-Bus listener for `systemd-logind` `PrepareForSleep` signals (zbus) |
 | `services` | `src/services.rs`, `src/services/log_tailer.rs`, `src/services/waybar.rs`, `src/services/suspend.rs` | Background services: log tailer, waybar state I/O, suspend watcher (all run inside the daemon) |
-| `infra` | `src/infra.rs`, `src/infra/clipboard.rs`, `src/infra/editor.rs`, `src/infra/geo.rs`, `src/infra/paths.rs`, `src/infra/process_handle.rs` | Infrastructure utilities: clipboard (TUI client), editor (TUI client), geo, paths, process handle |
+| `infra` | `src/infra.rs`, `src/infra/clipboard.rs`, `src/infra/editor.rs`, `src/infra/geo.rs`, `src/infra/paths.rs`, `src/infra/process_handle.rs`, `src/infra/subscription.rs` | Infrastructure utilities: clipboard (TUI client), editor (TUI client), geo, paths, process handle, subscription fetcher |
 
 ---
 

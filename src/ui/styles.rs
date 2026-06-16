@@ -11,14 +11,6 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Style for the currently highlighted list item.
-    pub fn selected() -> Style {
-        Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    }
-
     /// Default text style.
     pub fn normal() -> Style {
         Style::default().fg(Color::Gray)
@@ -60,14 +52,6 @@ mod tests {
     fn accent_is_cyan_bold() {
         let s = Theme::accent();
         assert_eq!(s.fg, Some(Color::Cyan));
-        assert!(s.add_modifier.contains(Modifier::BOLD));
-    }
-
-    #[test]
-    fn selected_is_dark_gray_white_bold() {
-        let s = Theme::selected();
-        assert_eq!(s.bg, Some(Color::DarkGray));
-        assert_eq!(s.fg, Some(Color::White));
         assert!(s.add_modifier.contains(Modifier::BOLD));
     }
 

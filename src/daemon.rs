@@ -56,6 +56,7 @@ fn run_loop(
                     | Effect::WriteState
                     | Effect::SaveConfig
                     | Effect::PasteClipboard
+                    | Effect::UpdateSubscription { .. }
                     | Effect::BroadcastState
             ) {
                 should_broadcast = true;
@@ -200,6 +201,17 @@ fn execute_daemon_effect(
             // In daemon mode paste is handled via IpcCommand::Paste directly;
             // this variant should not normally reach the daemon.
         }
+        Effect::UpdateSubscription { id } => {
+            if let Some(sub) = model.config.subscriptions.iter().find(|s| s.id == id) {
+                let url = sub.url.clone();
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    let result = crate::infra::subscription::fetch_subscription(&url)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(Msg::SubscriptionFetched { id, result });
+                });
+            }
+        }
         Effect::BroadcastState => {}
         Effect::Quit => {
             model.should_quit = true;
@@ -241,6 +253,7 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         geo_last_updated: model.geo_last_updated.clone(),
         overlay: model.overlay,
         profiles: model.config.profiles.clone(),
+        subscriptions: model.config.subscriptions.clone(),
         settings: model.config.settings.clone(),
     }
 }

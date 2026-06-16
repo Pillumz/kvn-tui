@@ -1194,6 +1194,7 @@ name = "kvn-tui"
 version = "0.12.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "crossterm",

@@ -43,6 +43,9 @@ chrono = { version = "0.4", features = ["clock", "serde"], default-features = fa
 # URL encoding / decoding
 urlencoding = "2.1"
 
+# Base64 decoding for subscription bodies
+base64 = "0.22"
+
 # D-Bus integration for suspend/resume detection (systemd-logind)
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 

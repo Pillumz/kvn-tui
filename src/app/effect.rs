@@ -1,4 +1,5 @@
 use crate::config::profile::{Profile, Settings};
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq)]
 #[allow(clippy::large_enum_variant)]
@@ -15,6 +16,9 @@ pub enum Effect {
     SaveConfig,
     OpenEditor(usize),
     PasteClipboard,
+    UpdateSubscription {
+        id: Uuid,
+    },
     BroadcastState,
     Quit,
     AppendAppLog {

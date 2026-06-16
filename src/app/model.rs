@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 
 use crate::config::profile::{Config, GeoRegion, Profile};
@@ -15,6 +15,14 @@ pub enum Overlay {
     Error,
     RoutingMode,
     GeoRegions,
+}
+
+/// A single selectable row in the unified Sources list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRow {
+    StandaloneProfile(usize),
+    SubscriptionHeader(usize),
+    SubscriptionProfile { sub_idx: usize, profile_idx: usize },
 }
 
 /// VPN connection state.
@@ -61,6 +69,50 @@ pub struct AppState {
 /// Maximum number of log lines kept in the UI buffer.
 pub(crate) const MAX_LOG_LINES: usize = 1000;
 
+/// Build the flat list of selectable rows for a given config.
+fn source_rows(config: &Config) -> Vec<SourceRow> {
+    let mut rows = Vec::new();
+    for (idx, profile) in config.profiles.iter().enumerate() {
+        if profile.subscription_id.is_none() {
+            rows.push(SourceRow::StandaloneProfile(idx));
+        }
+    }
+    for (sub_idx, sub) in config.subscriptions.iter().enumerate() {
+        rows.push(SourceRow::SubscriptionHeader(sub_idx));
+        for (profile_idx, profile) in config.profiles.iter().enumerate() {
+            if profile.subscription_id == Some(sub.id) {
+                rows.push(SourceRow::SubscriptionProfile {
+                    sub_idx,
+                    profile_idx,
+                });
+            }
+        }
+    }
+    rows
+}
+
+/// Return the flat row index that points at the given config profile index.
+pub(crate) fn row_for_profile(config: &Config, profile_idx: usize) -> usize {
+    source_rows(config)
+        .iter()
+        .position(|row| match row {
+            SourceRow::StandaloneProfile(idx) => *idx == profile_idx,
+            SourceRow::SubscriptionProfile {
+                profile_idx: idx, ..
+            } => *idx == profile_idx,
+            _ => false,
+        })
+        .unwrap_or(0)
+}
+
+/// Return the flat row index that points at the given subscription header.
+pub(crate) fn row_for_subscription_header(config: &Config, sub_idx: usize) -> usize {
+    source_rows(config)
+        .iter()
+        .position(|row| matches!(row, SourceRow::SubscriptionHeader(idx) if *idx == sub_idx))
+        .unwrap_or(0)
+}
+
 /// Application data model — no side effects.
 pub struct Model {
     pub overlay: Overlay,
@@ -75,6 +127,8 @@ pub struct Model {
     pub logs: VecDeque<String>,
     pub log_scroll: usize,
     pub geo_updating: bool,
+    pub subscription_fetching: bool,
+    pub subscription_updates: HashSet<Uuid>,
     pub needs_redraw: bool,
     pub should_quit: bool,
     pub geo_last_updated: Option<String>,
@@ -103,7 +157,7 @@ impl Model {
     /// Initialize application state and load persisted configuration.
     pub fn new() -> anyhow::Result<Self> {
         let config = load_config().unwrap_or_default();
-        let selected = config.resolve_selected();
+        let default_selected = 0;
 
         // Detect a background session left by a previous "hide" (q) action.
         let background = crate::services::waybar::detect_background_session();
@@ -118,16 +172,16 @@ impl Model {
                     .profiles
                     .iter()
                     .position(|p| p.id == profile_id)
-                    .unwrap_or(selected);
+                    .unwrap_or(0);
                 (
                     ConnectionState::Connected,
-                    idx,
+                    row_for_profile(&config, idx),
                     AppStatus::Info(format!("Connected to {} (background)", profile_name)),
                     Some(pid),
                     Some(profile_id),
                 )
             } else {
-                let (c, s, st) = Self::resolve_startup_state(&config, selected);
+                let (c, s, st) = Self::resolve_startup_state(&config, default_selected);
                 (c, s, st, None, None)
             };
 
@@ -159,6 +213,8 @@ impl Model {
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,
+            subscription_fetching: false,
+            subscription_updates: HashSet::new(),
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
@@ -177,7 +233,7 @@ impl Model {
     /// Build a Model from an already-loaded config (used by the TUI client
     /// after it reloads profiles.json independently of the daemon).
     pub fn from_config(config: Config) -> Self {
-        let selected = config.resolve_selected();
+        let selected = 0;
         let region = config
             .settings
             .geo_routing
@@ -200,6 +256,8 @@ impl Model {
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,
+            subscription_fetching: false,
+            subscription_updates: HashSet::new(),
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
@@ -228,7 +286,11 @@ impl Model {
                 } else {
                     AppStatus::Info("Press ? for help".to_string())
                 };
-                return (ConnectionState::Connecting, idx, status);
+                return (
+                    ConnectionState::Connecting,
+                    row_for_profile(config, idx),
+                    status,
+                );
             }
         }
         (
@@ -243,9 +305,20 @@ impl Model {
         save_config(&self.config)
     }
 
+    /// Build the flat list of selectable rows for the current config.
+    pub fn source_rows(&self) -> Vec<SourceRow> {
+        source_rows(&self.config)
+    }
+
+    /// Return the currently selected row, if any.
+    pub fn selected_row(&self) -> Option<SourceRow> {
+        self.source_rows().get(self.selected).copied()
+    }
+
     /// Move selection down by one item.
     pub fn select_next(&mut self) {
-        crate::ui::nav::select_next(&mut self.selected, self.config.profiles.len());
+        let len = self.source_rows().len();
+        crate::ui::nav::select_next(&mut self.selected, len);
     }
 
     /// Move selection up by one item.
@@ -253,36 +326,91 @@ impl Model {
         crate::ui::nav::select_prev(&mut self.selected);
     }
 
-    /// Jump to the first profile.
+    /// Jump to the first item.
     pub fn select_first(&mut self) {
-        crate::ui::nav::select_first(&mut self.selected);
+        self.selected = 0;
     }
 
-    /// Jump to the last profile.
+    /// Jump to the last item.
     pub fn select_last(&mut self) {
-        crate::ui::nav::select_last(&mut self.selected, self.config.profiles.len());
+        let len = self.source_rows().len();
+        self.selected = len.saturating_sub(1);
     }
 
     /// Return the currently selected profile, if any.
     pub fn selected_profile(&self) -> Option<&Profile> {
-        self.config.profiles.get(self.selected)
-    }
-
-    /// Remove the currently selected profile after confirmation.
-    pub fn delete_selected(&mut self) {
-        if self.selected < self.config.profiles.len() {
-            self.config.profiles.remove(self.selected);
-            if self.selected >= self.config.profiles.len() && !self.config.profiles.is_empty() {
-                self.selected = self.config.profiles.len() - 1;
+        match self.selected_row()? {
+            SourceRow::StandaloneProfile(idx) => self.config.profiles.get(idx),
+            SourceRow::SubscriptionProfile { profile_idx, .. } => {
+                self.config.profiles.get(profile_idx)
             }
-            self.overlay = Overlay::None;
+            _ => None,
         }
     }
 
-    /// Add a new profile and persist.
+    /// Return the index of the currently selected profile in `config.profiles`, if any.
+    pub fn selected_profile_index(&self) -> Option<usize> {
+        match self.selected_row()? {
+            SourceRow::StandaloneProfile(idx)
+            | SourceRow::SubscriptionProfile {
+                profile_idx: idx, ..
+            } => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Return the currently selected subscription, if any.
+    pub fn selected_subscription(&self) -> Option<&crate::config::profile::Subscription> {
+        match self.selected_row()? {
+            SourceRow::SubscriptionHeader(idx) => self.config.subscriptions.get(idx),
+            _ => None,
+        }
+    }
+
+    /// Return the index of the currently selected subscription, if any.
+    pub fn selected_subscription_index(&self) -> Option<usize> {
+        match self.selected_row()? {
+            SourceRow::SubscriptionHeader(idx) => Some(idx),
+            _ => None,
+        }
+    }
+
+    /// Remove the currently selected source item after confirmation.
+    pub fn delete_selected(&mut self) {
+        let rows = self.source_rows();
+        let Some(row) = rows.get(self.selected).copied() else {
+            return;
+        };
+        match row {
+            SourceRow::StandaloneProfile(idx)
+            | SourceRow::SubscriptionProfile {
+                profile_idx: idx, ..
+            } => {
+                if idx < self.config.profiles.len() {
+                    self.config.profiles.remove(idx);
+                }
+            }
+            SourceRow::SubscriptionHeader(idx) => {
+                if let Some(sub) = self.config.subscriptions.get(idx) {
+                    let sub_id = sub.id;
+                    self.config
+                        .profiles
+                        .retain(|p| p.subscription_id != Some(sub_id));
+                    self.config.subscriptions.remove(idx);
+                }
+            }
+        }
+        self.overlay = Overlay::None;
+        let len = self.source_rows().len();
+        if self.selected >= len && len > 0 {
+            self.selected = len - 1;
+        }
+    }
+
+    /// Add a new standalone profile and move selection to it.
     pub fn add_profile(&mut self, profile: Profile) {
         self.config.profiles.push(profile);
-        self.selected = self.config.profiles.len().saturating_sub(1);
+        self.selected = row_for_profile(&self.config, self.config.profiles.len() - 1);
     }
 
     /// Check whether a profile with the same UUID already exists.
@@ -295,7 +423,7 @@ impl Model {
 impl Model {
     /// Create a Model instance for testing with a given config.
     pub fn test_new(config: Config) -> Self {
-        let selected = config.resolve_selected();
+        let selected = 0;
         Self {
             overlay: Overlay::None,
             connection: ConnectionState::Idle,
@@ -309,6 +437,8 @@ impl Model {
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,
+            subscription_fetching: false,
+            subscription_updates: HashSet::new(),
             needs_redraw: false,
             should_quit: false,
             geo_last_updated: None,

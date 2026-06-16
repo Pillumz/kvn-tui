@@ -1,6 +1,7 @@
 use crate::app::model::{ConnectionState, Overlay};
-use crate::config::profile::{Profile, Settings};
+use crate::config::profile::{Profile, Settings, Subscription};
 use crossterm::event::KeyEvent;
+use uuid::Uuid;
 
 pub enum Msg {
     Key(KeyEvent),
@@ -9,8 +10,14 @@ pub enum Msg {
     GeoUpdated(GeoResult),
     GeoLastUpdated(Option<String>),
     SystemResumed,
-    Connected { pid: u32 },
+    Connected {
+        pid: u32,
+    },
     ConnectFailed(String),
+    SubscriptionFetched {
+        id: Uuid,
+        result: Result<Vec<crate::config::profile::Profile>, String>,
+    },
 
     IpcCommand(IpcCommand),
     StateUpdate(StateSnapshot),
@@ -60,5 +67,6 @@ pub struct StateSnapshot {
     pub geo_last_updated: Option<String>,
     pub overlay: Overlay,
     pub profiles: Vec<Profile>,
+    pub subscriptions: Vec<Subscription>,
     pub settings: Settings,
 }

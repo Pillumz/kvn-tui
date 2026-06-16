@@ -1,11 +1,11 @@
 ---
 source: src/ui/layout.rs
+assertion_line: 514
 expression: "snapshot_terminal(&model, 80, 40)"
 ---
-┌ Profiles ────────────────────────────┐┌ Logs ────────────────────────────────┐
-│Name          Protocol Address  Port  ││                                      │
-│                                      ││                                      │
-│                                      ││                                      │
+┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
+│No sources. Press p to paste a profile││                                      │
+│or subscription URL from clipboard.   ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
@@ -18,12 +18,13 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │k / Up       Move up                          │               │
 │               │g            Go to first                      │               │
 │               │G            Go to last                       │               │
-│               │Enter        Connect to selected              │               │
+│               │Enter        Connect to selected profile      │               │
 │               │p            Paste from clipboard             │               │
-│               │d            Delete profile                   │               │
+│               │d            Delete selected source           │               │
 │               │m            Routing mode (popup list)        │               │
 │               │o            Geo region                       │               │
-│               │u            Update geoip/geosite databases   │               │
+│               │u            Update subscription or geo       │               │
+│               │i            Cycle subscription auto-update   │               │
 │               │e            Open profiles.json in $EDITOR    │               │
 │               │a            Toggle auto-connect              │               │
 │               │r            Reconnect                        │               │
@@ -31,8 +32,8 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │q / Esc      Detach TUI                       │               │
 │               │Ctrl+C       Quit                             │               │
 │               │?            Show this help                   │               │
+│               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
-│                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │

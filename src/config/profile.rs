@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use url::Url;
@@ -167,6 +168,8 @@ pub struct Profile {
     pub fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription_id: Option<Uuid>,
 }
 
 impl Profile {
@@ -186,8 +189,99 @@ impl Profile {
             transport_service_name: None,
             fingerprint: None,
             tags: Vec::new(),
+            subscription_id: None,
         }
     }
+}
+
+/// Auto-update schedule for a subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionAutoUpdate {
+    #[default]
+    Off,
+    Every1h,
+    Every12h,
+    Every1d,
+    Every7d,
+}
+
+impl SubscriptionAutoUpdate {
+    /// Return the interval in minutes.
+    pub fn interval_minutes(self) -> u64 {
+        match self {
+            Self::Off => 0,
+            Self::Every1h => 60,
+            Self::Every12h => 720,
+            Self::Every1d => 1440,
+            Self::Every7d => 10080,
+        }
+    }
+
+    /// Cycle to the next schedule.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Every1h,
+            Self::Every1h => Self::Every12h,
+            Self::Every12h => Self::Every1d,
+            Self::Every1d => Self::Every7d,
+            Self::Every7d => Self::Off,
+        }
+    }
+
+    /// Short label for the schedule, e.g. "✕" or "🗘 1h".
+    pub fn label(self) -> String {
+        match self {
+            Self::Off => "✕".to_string(),
+            _ => format!("🗘 {}", self.interval_label()),
+        }
+    }
+
+    /// Short interval label without icon.
+    pub fn interval_label(self) -> String {
+        match self {
+            Self::Off => "off".to_string(),
+            Self::Every1h => "1h".to_string(),
+            Self::Every12h => "12h".to_string(),
+            Self::Every1d => "1d".to_string(),
+            Self::Every7d => "7d".to_string(),
+        }
+    }
+}
+
+/// A subscription URL that can be refreshed to import a set of profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Subscription {
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub auto_update: SubscriptionAutoUpdate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<DateTime<Local>>,
+}
+
+#[test]
+fn subscription_auto_update_cycles_and_labels() {
+    assert_eq!(SubscriptionAutoUpdate::Off.interval_minutes(), 0);
+    assert_eq!(SubscriptionAutoUpdate::Every1h.interval_minutes(), 60);
+    assert_eq!(SubscriptionAutoUpdate::Every12h.interval_minutes(), 720);
+    assert_eq!(SubscriptionAutoUpdate::Every1d.interval_minutes(), 1440);
+    assert_eq!(SubscriptionAutoUpdate::Every7d.interval_minutes(), 10080);
+
+    assert_eq!(
+        SubscriptionAutoUpdate::Off.next(),
+        SubscriptionAutoUpdate::Every1h
+    );
+    assert_eq!(
+        SubscriptionAutoUpdate::Every7d.next(),
+        SubscriptionAutoUpdate::Off
+    );
+
+    assert_eq!(SubscriptionAutoUpdate::Off.label(), "✕");
+    assert_eq!(SubscriptionAutoUpdate::Every1h.label(), "🗘 1h");
 }
 
 /// Geo-region and routing-mode preferences.
@@ -271,6 +365,8 @@ impl Default for Settings {
 pub struct Config {
     #[serde(default)]
     pub profiles: Vec<Profile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subscriptions: Vec<Subscription>,
     #[serde(default)]
     pub settings: Settings,
 }

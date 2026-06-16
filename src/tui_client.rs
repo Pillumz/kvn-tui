@@ -111,14 +111,19 @@ fn run_loop(
                         event_reading_enabled.store(false, Ordering::Relaxed);
                         disable_raw_mode()?;
                         terminal.backend_mut().execute(LeaveAlternateScreen)?;
-                        let result = crate::infra::editor::open_profiles_editor(model.selected);
+                        let result = crate::infra::editor::open_profiles_editor(
+                            model.selected_profile_index().unwrap_or(0),
+                        );
                         enable_raw_mode()?;
                         terminal.backend_mut().execute(EnterAlternateScreen)?;
                         terminal.clear()?;
                         event_reading_enabled.store(true, Ordering::Relaxed);
                         if result.is_ok() {
                             if let Ok(config) = crate::config::load_config() {
-                                model.selected = config.resolve_selected();
+                                model.selected = crate::app::model::row_for_profile(
+                                    &config,
+                                    config.resolve_selected(),
+                                );
                                 model.config = config;
                             }
                             client.send(&IpcCommand::ReloadConfig)?;
@@ -171,6 +176,7 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.geo_last_updated = snapshot.geo_last_updated;
     model.overlay = snapshot.overlay;
     model.config.profiles = snapshot.profiles;
+    model.config.subscriptions = snapshot.subscriptions;
     model.config.settings = snapshot.settings;
 }
 

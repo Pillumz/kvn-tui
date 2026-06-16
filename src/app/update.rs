@@ -1,10 +1,12 @@
 use crate::app::effect::Effect;
 use crate::app::model::{AppStatus, ConnectionState, Model, Overlay};
 use crate::app::msg::{GeoResult, Msg};
-use crate::config::profile::GeoRegion;
 #[cfg(test)]
-use crate::config::profile::{Profile, Protocol};
+use crate::config::profile::Protocol;
+use crate::config::profile::{GeoRegion, Profile, Subscription, SubscriptionAutoUpdate};
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
+use uuid::Uuid;
 
 /// Pure function: Model + Msg → updated Model + list of Effects.
 /// No I/O, no threads, no system calls.
@@ -64,6 +66,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
             }
             effects
         }
+        Msg::SubscriptionFetched { id, result } => handle_subscription_result(model, id, result),
         Msg::ConnectFailed(err) => {
             model.connection = ConnectionState::Idle;
             model.overlay = Overlay::Error;
@@ -114,7 +117,7 @@ fn handle_config_reloaded(
 ) -> Vec<Effect> {
     match result {
         Ok(config) => {
-            model.selected = config.resolve_selected();
+            model.selected = crate::app::model::row_for_profile(&config, config.resolve_selected());
             model.config = config;
             let mut effects = vec![Effect::BroadcastState];
             if let Some(e) = set_status(model, AppStatus::Info("Profiles reloaded".into())) {
@@ -151,12 +154,41 @@ fn handle_tick(model: &mut Model) -> Vec<Effect> {
         }
     }
 
+    // Auto-update subscriptions that are due.
+    effects.extend(check_due_subscriptions(model));
+
+    effects
+}
+
+fn check_due_subscriptions(model: &mut Model) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    let now = Local::now();
+    for sub in &model.config.subscriptions {
+        let interval = sub.auto_update.interval_minutes();
+        if interval == 0 {
+            continue;
+        }
+        if model.subscription_updates.contains(&sub.id) {
+            continue;
+        }
+        let due = match sub.last_updated {
+            None => true,
+            Some(last) => {
+                let elapsed = now.signed_duration_since(last);
+                elapsed.num_minutes() >= interval as i64
+            }
+        };
+        if due {
+            model.subscription_updates.insert(sub.id);
+            effects.push(Effect::UpdateSubscription { id: sub.id });
+        }
+    }
     effects
 }
 
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match model.overlay {
-        Overlay::None => handle_main(model, key),
+        Overlay::None => handle_sources(model, key),
         Overlay::Help => {
             model.overlay = Overlay::None;
             vec![]
@@ -171,7 +203,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let mut effects = Vec::new();
     match key.code {
         // Navigation
@@ -198,10 +230,48 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     effects.push(e);
                 }
                 model.connection = ConnectionState::Connecting;
+            } else if let Some(sub) = model.selected_subscription() {
+                let id = sub.id;
+                let name = sub.name.clone();
+                // If the subscription already has profiles, connect to the first one.
+                if let Some(profile) = model
+                    .config
+                    .profiles
+                    .iter()
+                    .find(|p| p.subscription_id == Some(id))
+                    .cloned()
+                {
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info(format!(
+                            "Connecting to {}…",
+                            profile.name
+                        )),
+                    ) {
+                        effects.push(e);
+                    }
+                    model.connection = ConnectionState::Connecting;
+                } else {
+                    model.subscription_fetching = true;
+                    model.subscription_updates.insert(id);
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info(format!(
+                            "Updating subscription '{}'…",
+                            name
+                        )),
+                    ) {
+                        effects.push(e);
+                    }
+                    return vec![Effect::SaveConfig, Effect::UpdateSubscription { id }]
+                        .into_iter()
+                        .chain(effects)
+                        .collect();
+                }
             } else if let Some(e) = set_status(
                 model,
                 crate::app::model::AppStatus::Info(
-                    "No profiles. Press p to paste or e to edit.".into(),
+                    "No sources. Press p to paste or e to edit.".into(),
                 ),
             ) {
                 effects.push(e);
@@ -210,7 +280,9 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('p') => {
             return vec![Effect::PasteClipboard];
         }
-        KeyCode::Char('d') if model.selected_profile().is_some() => {
+        KeyCode::Char('d')
+            if model.selected_profile().is_some() || model.selected_subscription().is_some() =>
+        {
             model.overlay = Overlay::ConfirmDelete;
         }
         KeyCode::Char('m') => {
@@ -221,27 +293,70 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 .position(|m| *m == model.config.settings.geo_routing.mode())
                 .unwrap_or(0);
         }
-        KeyCode::Char('u') if !model.geo_updating => {
-            if model.config.settings.geo_routing.current_region == Some(GeoRegion::Global) {
+        KeyCode::Char('u') => {
+            if let Some(idx) = model.selected_subscription_index() {
+                if let Some(sub) = model.config.subscriptions.get(idx) {
+                    let id = sub.id;
+                    let name = sub.name.clone();
+                    model.subscription_fetching = true;
+                    model.subscription_updates.insert(id);
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info(format!(
+                            "Updating subscription '{}'…",
+                            name
+                        )),
+                    ) {
+                        effects.push(e);
+                    }
+                    return vec![Effect::SaveConfig, Effect::UpdateSubscription { id }]
+                        .into_iter()
+                        .chain(effects)
+                        .collect();
+                }
+            } else if !model.geo_updating {
+                if model.config.settings.geo_routing.current_region == Some(GeoRegion::Global) {
+                    if let Some(e) = set_status(
+                        model,
+                        crate::app::model::AppStatus::Info(
+                            "Geo updates are not available in Global region".to_string(),
+                        ),
+                    ) {
+                        effects.push(e);
+                    }
+                    return effects;
+                }
+                model.geo_updating = true;
                 if let Some(e) = set_status(
                     model,
-                    crate::app::model::AppStatus::Info(
-                        "Geo updates are not available in Global region".to_string(),
-                    ),
+                    crate::app::model::AppStatus::Info("Checking for geo updates...".to_string()),
+                ) {
+                    effects.push(e);
+                }
+                effects.push(Effect::DownloadGeo);
+                return effects;
+            }
+        }
+        KeyCode::Char('i') => {
+            if let Some(idx) = model.selected_subscription_index() {
+                let (name, label) = if let Some(sub) = model.config.subscriptions.get_mut(idx) {
+                    sub.auto_update = sub.auto_update.next();
+                    (sub.name.clone(), sub.auto_update.label())
+                } else {
+                    return effects;
+                };
+                let mut effects = vec![Effect::SaveConfig];
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!(
+                        "Subscription '{}' [{}]",
+                        name, label
+                    )),
                 ) {
                     effects.push(e);
                 }
                 return effects;
             }
-            model.geo_updating = true;
-            if let Some(e) = set_status(
-                model,
-                crate::app::model::AppStatus::Info("Checking for geo updates...".to_string()),
-            ) {
-                effects.push(e);
-            }
-            effects.push(Effect::DownloadGeo);
-            return effects;
         }
         KeyCode::Char('o') => {
             model.overlay = Overlay::GeoRegions;
@@ -254,7 +369,9 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             };
         }
         KeyCode::Char('e') => {
-            return vec![Effect::OpenEditor(model.selected)];
+            return vec![Effect::OpenEditor(
+                model.selected_profile_index().unwrap_or(0),
+            )];
         }
         KeyCode::Char('r') if model.connection == ConnectionState::Connected => {
             if let Some(profile) = model.selected_profile() {
@@ -300,18 +417,46 @@ fn handle_main(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Char('y') | KeyCode::Enter => {
-            let name = model.selected_profile().map(|p| p.name.clone());
-            model.delete_selected();
-            let mut effects = vec![Effect::SaveConfig];
-            if let Some(name) = name {
-                if let Some(e) = set_status(
-                    model,
-                    crate::app::model::AppStatus::Info(format!("Profile '{}' deleted", name)),
-                ) {
-                    effects.push(e);
+            model.overlay = Overlay::None;
+            let row = model.selected_row();
+            match row {
+                Some(crate::app::model::SourceRow::StandaloneProfile(_))
+                | Some(crate::app::model::SourceRow::SubscriptionProfile { .. }) => {
+                    let name = model.selected_profile().map(|p| p.name.clone());
+                    model.delete_selected();
+                    let mut effects = vec![Effect::SaveConfig];
+                    if let Some(name) = name {
+                        if let Some(e) = set_status(
+                            model,
+                            crate::app::model::AppStatus::Info(format!(
+                                "Profile '{}' deleted",
+                                name
+                            )),
+                        ) {
+                            effects.push(e);
+                        }
+                    }
+                    return effects;
                 }
+                Some(crate::app::model::SourceRow::SubscriptionHeader(_)) => {
+                    let name = model.selected_subscription().map(|s| s.name.clone());
+                    model.delete_selected();
+                    let mut effects = vec![Effect::SaveConfig];
+                    if let Some(name) = name {
+                        if let Some(e) = set_status(
+                            model,
+                            crate::app::model::AppStatus::Info(format!(
+                                "Subscription '{}' deleted",
+                                name
+                            )),
+                        ) {
+                            effects.push(e);
+                        }
+                    }
+                    return effects;
+                }
+                _ => {}
             }
-            return effects;
         }
         KeyCode::Char('n') | KeyCode::Esc => {
             model.overlay = Overlay::None;
@@ -319,6 +464,13 @@ fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+fn derive_subscription_name(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| "Subscription".to_string())
 }
 
 fn handle_ipc_command(model: &mut Model, cmd: crate::app::msg::IpcCommand) -> Vec<Effect> {
@@ -355,6 +507,8 @@ fn rebuild_key_event(
         "Esc" => KeyCode::Esc,
         "Up" => KeyCode::Up,
         "Down" => KeyCode::Down,
+        "Tab" => KeyCode::Tab,
+        "BackTab" => KeyCode::BackTab,
         "Char" => KeyCode::Char(ch.unwrap_or(' ')),
         _ => return None,
     };
@@ -496,7 +650,7 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                         .last_connected_profile
                         .and_then(|id| model.config.profiles.iter().position(|p| p.id == id))
                     {
-                        model.selected = idx;
+                        model.selected = crate::app::model::row_for_profile(&model.config, idx);
                         model.connection = ConnectionState::Connecting;
                         if let Some(profile) = model.config.profiles.get(idx) {
                             if let Some(e) = set_status(
@@ -530,7 +684,12 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
-    match crate::config::profile::parse_share_link(text) {
+    let trimmed = text.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return add_and_fetch_subscription(model, trimmed);
+    }
+
+    match crate::config::profile::parse_share_link(trimmed) {
         Ok(profile) => {
             if model.has_duplicate(&profile) {
                 let mut effects = Vec::new();
@@ -558,6 +717,129 @@ fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
             if let Some(e) = set_status(
                 model,
                 crate::app::model::AppStatus::Error(format!("Invalid URI: {}", e)),
+            ) {
+                effects.push(e);
+            }
+            effects
+        }
+    }
+}
+
+fn add_and_fetch_subscription(model: &mut Model, url: &str) -> Vec<Effect> {
+    let name = derive_subscription_name(url);
+    let id = Uuid::new_v4();
+    let sub = Subscription {
+        id,
+        name: name.clone(),
+        url: url.to_string(),
+        auto_update: SubscriptionAutoUpdate::default(),
+        last_updated: None,
+    };
+    model.config.subscriptions.push(sub);
+    model.selected = crate::app::model::row_for_subscription_header(
+        &model.config,
+        model.config.subscriptions.len().saturating_sub(1),
+    );
+    model.subscription_fetching = true;
+    model.subscription_updates.insert(id);
+
+    let mut effects = vec![Effect::SaveConfig, Effect::UpdateSubscription { id }];
+    if let Some(e) = set_status(
+        model,
+        crate::app::model::AppStatus::Info(format!(
+            "Added subscription '{}' and fetching profiles…",
+            name
+        )),
+    ) {
+        effects.push(e);
+    }
+    effects
+}
+
+fn handle_subscription_result(
+    model: &mut Model,
+    id: Uuid,
+    result: Result<Vec<Profile>, String>,
+) -> Vec<Effect> {
+    let managed = !id.is_nil();
+    model.subscription_updates.remove(&id);
+    if model.subscription_updates.is_empty() {
+        model.subscription_fetching = false;
+    }
+
+    if managed {
+        if let Some(sub) = model.config.subscriptions.iter_mut().find(|s| s.id == id) {
+            sub.last_updated = Some(Local::now());
+        }
+        // Replace previously imported profiles from this subscription.
+        model
+            .config
+            .profiles
+            .retain(|p| p.subscription_id != Some(id));
+    }
+
+    match result {
+        Ok(profiles) => {
+            let mut imported = 0;
+            for mut profile in profiles {
+                if let Some(idx) = model
+                    .config
+                    .profiles
+                    .iter()
+                    .position(|p| p.uuid == profile.uuid)
+                {
+                    let existing = &model.config.profiles[idx];
+                    if existing.subscription_id.is_none() {
+                        // Update the standalone profile in place and link it to
+                        // the subscription, preserving its identity.
+                        profile.id = existing.id;
+                        profile.uuid.clone_from(&existing.uuid);
+                        if managed {
+                            profile.subscription_id = Some(id);
+                        }
+                        model.config.profiles[idx] = profile;
+                        imported += 1;
+                    }
+                    // Profiles belonging to other subscriptions are skipped.
+                } else {
+                    if managed {
+                        profile.subscription_id = Some(id);
+                    }
+                    model.add_profile(profile);
+                    imported += 1;
+                }
+            }
+
+            let mut effects = Vec::new();
+            if imported > 0 || managed {
+                effects.push(Effect::SaveConfig);
+            }
+            if imported > 0 {
+                if let Some(e) = set_status(
+                    model,
+                    crate::app::model::AppStatus::Info(format!(
+                        "Imported {} profile(s) from subscription",
+                        imported
+                    )),
+                ) {
+                    effects.push(e);
+                }
+            } else if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Info("No new profiles in subscription".into()),
+            ) {
+                effects.push(e);
+            }
+            effects
+        }
+        Err(err) => {
+            let mut effects = Vec::new();
+            if managed {
+                effects.push(Effect::SaveConfig);
+            }
+            if let Some(e) = set_status(
+                model,
+                crate::app::model::AppStatus::Error(format!("Subscription failed: {}", err)),
             ) {
                 effects.push(e);
             }
@@ -622,7 +904,7 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::RoutingMode;
+    use crate::config::profile::{RoutingMode, SubscriptionAutoUpdate};
     use crate::test_helpers::*;
     use crossterm::event::KeyCode;
 
@@ -667,13 +949,13 @@ mod tests {
             ),
         ]);
         assert_eq!(model.selected, 0);
-        let _ = handle_main(&mut model, key('j'));
+        let _ = handle_sources(&mut model, key('j'));
         assert_eq!(model.selected, 1);
-        let _ = handle_main(&mut model, key('k'));
+        let _ = handle_sources(&mut model, key('k'));
         assert_eq!(model.selected, 0);
-        let _ = handle_main(&mut model, key('G'));
+        let _ = handle_sources(&mut model, key('G'));
         assert_eq!(model.selected, 1);
-        let _ = handle_main(&mut model, key('g'));
+        let _ = handle_sources(&mut model, key('g'));
         assert_eq!(model.selected, 0);
     }
 
@@ -686,7 +968,7 @@ mod tests {
             443,
             "u1".to_string(),
         )]);
-        let effects = handle_main(&mut model, KeyEvent::from(KeyCode::Enter));
+        let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.connection, ConnectionState::Connecting);
         assert_eq!(effects, vec![app_log_info("Connecting to A…")]);
     }
@@ -694,12 +976,61 @@ mod tests {
     #[test]
     fn normal_mode_enter_no_profile() {
         let mut model = model_with_profiles(vec![]);
-        let effects = handle_main(&mut model, KeyEvent::from(KeyCode::Enter));
+        let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(model.overlay, Overlay::None);
         assert_eq!(
             effects,
-            vec![app_log_info("No profiles. Press p to paste or e to edit.")]
+            vec![app_log_info("No sources. Press p to paste or e to edit.")]
         );
+    }
+
+    #[test]
+    fn normal_mode_enter_on_subscription_header_connects_first_profile() {
+        use crate::config::profile::Subscription;
+        use uuid::Uuid;
+
+        let sub_id = Uuid::new_v4();
+        let mut profile = Profile::new(
+            "SubProfile".to_string(),
+            Protocol::Vless,
+            "2.2.2.2".to_string(),
+            443,
+            "u2".to_string(),
+        );
+        profile.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![profile]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.selected = 0; // subscription header
+        let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert_eq!(model.connection, ConnectionState::Connecting);
+        assert_eq!(effects, vec![app_log_info("Connecting to SubProfile…")]);
+    }
+
+    #[test]
+    fn normal_mode_enter_on_empty_subscription_updates_it() {
+        use crate::config::profile::Subscription;
+        use uuid::Uuid;
+
+        let sub_id = Uuid::new_v4();
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.selected = 0; // subscription header
+        let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert!(model.subscription_fetching);
+        assert!(effects.contains(&Effect::UpdateSubscription { id: sub_id }));
+        assert!(effects.contains(&Effect::SaveConfig));
     }
 
     #[test]
@@ -711,7 +1042,7 @@ mod tests {
             443,
             "u1".to_string(),
         )]);
-        let effects = handle_main(&mut model, key('d'));
+        let effects = handle_sources(&mut model, key('d'));
         assert_eq!(model.overlay, Overlay::ConfirmDelete);
         assert!(effects.is_empty());
     }
@@ -725,7 +1056,7 @@ mod tests {
             .settings
             .geo_routing
             .set_mode(RoutingMode::BypassRu);
-        let effects = handle_main(&mut model, key('m'));
+        let effects = handle_sources(&mut model, key('m'));
         assert_eq!(model.overlay, Overlay::RoutingMode);
         assert_eq!(model.routing_selected, 1);
         assert!(effects.is_empty());
@@ -807,6 +1138,19 @@ mod tests {
         );
         assert_eq!(effects, vec![Effect::BroadcastState]);
         assert_eq!(model.selected, 1);
+    }
+
+    #[test]
+    fn rebuild_key_event_handles_tab_and_backtab() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let tab = rebuild_key_event("Tab", None, false).unwrap();
+        assert_eq!(tab.code, KeyCode::Tab);
+        assert_eq!(tab.modifiers, KeyModifiers::empty());
+
+        let backtab = rebuild_key_event("BackTab", None, false).unwrap();
+        assert_eq!(backtab.code, KeyCode::BackTab);
+        assert_eq!(backtab.modifiers, KeyModifiers::empty());
     }
 
     #[test]
@@ -1180,7 +1524,7 @@ mod tests {
             .geo_routing
             .set_region(GeoRegion::Global);
 
-        let effects = handle_main(&mut model, key('u'));
+        let effects = handle_sources(&mut model, key('u'));
         assert!(!model.geo_updating);
         assert!(!effects.contains(&Effect::DownloadGeo));
         assert!(model.status.text().contains("not available"));
@@ -1398,7 +1742,7 @@ mod tests {
     fn toggle_auto_connect() {
         let mut model = model_with_profiles(vec![]);
         assert!(!model.config.settings.auto_connect);
-        let effects = handle_main(&mut model, key('a'));
+        let effects = handle_sources(&mut model, key('a'));
         assert!(model.config.settings.auto_connect);
         assert!(model.status.text().contains("enabled"));
         assert_eq!(
@@ -1406,7 +1750,7 @@ mod tests {
             vec![app_log_info("Auto-connect enabled"), Effect::SaveConfig]
         );
 
-        let effects = handle_main(&mut model, key('a'));
+        let effects = handle_sources(&mut model, key('a'));
         assert!(!model.config.settings.auto_connect);
         assert!(model.status.text().contains("disabled"));
         assert_eq!(
@@ -1435,5 +1779,463 @@ mod tests {
         assert_eq!(effects, vec![app_log_error("Profile already exists")]);
         assert!(model.status.is_error());
         assert!(model.status.text().contains("already exists"));
+    }
+
+    #[test]
+    fn paste_subscription_url_creates_subscription_and_fetches() {
+        let mut model = model_with_profiles(vec![]);
+        let url = "http://31.58.134.29:2096/sub/xrkjeq2mhwes0i8f";
+
+        let effects = handle_clipboard_text(&mut model, url);
+
+        assert_eq!(model.config.subscriptions.len(), 1);
+        assert_eq!(model.config.subscriptions[0].url, url);
+        assert!(matches!(
+            model.selected_row(),
+            Some(crate::app::model::SourceRow::SubscriptionHeader(0))
+        ));
+        assert!(model.subscription_fetching);
+        assert!(
+            model
+                .subscription_updates
+                .contains(&model.config.subscriptions[0].id)
+        );
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                Effect::UpdateSubscription {
+                    id: model.config.subscriptions[0].id
+                },
+                app_log_info("Added subscription '31.58.134.29' and fetching profiles…")
+            ]
+        );
+    }
+
+    #[test]
+    fn paste_vless_adds_standalone_profile() {
+        let mut model = model_with_profiles(vec![]);
+        let uri = "vless://671c62c7-6768-4b98-ac6b-572c9c707be0@203.0.113.42:443#Test";
+
+        let effects = handle_clipboard_text(&mut model, uri);
+
+        assert_eq!(model.config.profiles.len(), 1);
+        assert!(matches!(
+            model.selected_row(),
+            Some(crate::app::model::SourceRow::StandaloneProfile(0))
+        ));
+        assert_eq!(
+            effects,
+            vec![Effect::SaveConfig, app_log_info("Pasted profile: Test")]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_adds_profiles_and_saves() {
+        let mut model = model_with_profiles(vec![]);
+        let profiles = vec![
+            Profile::new(
+                "Sub1".to_string(),
+                Protocol::Vless,
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new(
+                "Sub2".to_string(),
+                Protocol::Vless,
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+        ];
+
+        let effects = handle_subscription_result(&mut model, Uuid::nil(), Ok(profiles));
+
+        assert!(!model.subscription_fetching);
+        assert_eq!(model.config.profiles.len(), 2);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Imported 2 profile(s) from subscription")
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_updates_standalone_duplicate() {
+        let mut model = model_with_profiles(vec![Profile::new(
+            "Existing".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        let profiles = vec![
+            Profile::new(
+                "Existing".to_string(),
+                Protocol::Vless,
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new(
+                "New".to_string(),
+                Protocol::Vless,
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+        ];
+
+        let effects = handle_subscription_result(&mut model, Uuid::nil(), Ok(profiles));
+
+        assert_eq!(model.config.profiles.len(), 2);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Imported 2 profile(s) from subscription")
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_skips_duplicate_from_other_subscription() {
+        let other_sub_id = Uuid::new_v4();
+        let mut existing = Profile::new(
+            "Existing".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        existing.subscription_id = Some(other_sub_id);
+        let mut model = model_with_profiles(vec![existing]);
+        model.config.subscriptions.push(Subscription {
+            id: other_sub_id,
+            name: "Other".to_string(),
+            url: "http://example.com/other".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+
+        let new_sub_id = Uuid::new_v4();
+        model.config.subscriptions.push(Subscription {
+            id: new_sub_id,
+            name: "New".to_string(),
+            url: "http://example.com/new".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+
+        let fetched = Profile::new(
+            "Existing".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+
+        let effects = handle_subscription_result(&mut model, new_sub_id, Ok(vec![fetched]));
+
+        assert_eq!(model.config.profiles.len(), 1);
+        assert_eq!(model.config.profiles[0].subscription_id, Some(other_sub_id));
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("No new profiles in subscription")
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_attaches_standalone_duplicate() {
+        let sub_id = Uuid::new_v4();
+        let standalone = Profile::new(
+            "OldName".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        let standalone_id = standalone.id;
+        let mut model = model_with_profiles(vec![standalone]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+
+        let mut fetched = Profile::new(
+            "NewName".to_string(),
+            Protocol::Vless,
+            "2.2.2.2".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        // Different id from parse, same uuid as the standalone profile.
+        fetched.id = Uuid::new_v4();
+
+        let effects = handle_subscription_result(&mut model, sub_id, Ok(vec![fetched]));
+
+        assert_eq!(model.config.profiles.len(), 1);
+        assert_eq!(model.config.profiles[0].id, standalone_id);
+        assert_eq!(model.config.profiles[0].name, "NewName");
+        assert_eq!(model.config.profiles[0].address, "2.2.2.2");
+        assert_eq!(model.config.profiles[0].subscription_id, Some(sub_id));
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Imported 1 profile(s) from subscription")
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_empty_logs_no_new_profiles() {
+        let mut model = model_with_profiles(vec![]);
+
+        let effects = handle_subscription_result(&mut model, Uuid::nil(), Ok(vec![]));
+
+        assert_eq!(model.config.profiles.len(), 0);
+        assert_eq!(
+            effects,
+            vec![app_log_info("No new profiles in subscription")]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_error_logs_failure() {
+        let mut model = model_with_profiles(vec![]);
+
+        let effects =
+            handle_subscription_result(&mut model, Uuid::nil(), Err("network down".to_string()));
+
+        assert!(!model.subscription_fetching);
+        assert_eq!(
+            effects,
+            vec![app_log_error("Subscription failed: network down")]
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_managed_replaces_profiles_and_updates_last_updated() {
+        let sub_id = Uuid::new_v4();
+        let mut existing = Profile::new(
+            "Old".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        existing.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![existing]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+
+        let new_profiles = vec![Profile::new(
+            "New".to_string(),
+            Protocol::Vless,
+            "2.2.2.2".to_string(),
+            443,
+            "u2".to_string(),
+        )];
+
+        let effects = handle_subscription_result(&mut model, sub_id, Ok(new_profiles));
+
+        assert_eq!(model.config.profiles.len(), 1);
+        assert_eq!(model.config.profiles[0].name, "New");
+        assert_eq!(model.config.profiles[0].subscription_id, Some(sub_id));
+        assert!(
+            model
+                .config
+                .subscriptions
+                .iter()
+                .find(|s| s.id == sub_id)
+                .unwrap()
+                .last_updated
+                .is_some()
+        );
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Imported 1 profile(s) from subscription")
+            ]
+        );
+    }
+
+    #[test]
+    fn subscriptions_update_triggers_fetch() {
+        let mut model = model_with_profiles(vec![]);
+        let sub_id = Uuid::new_v4();
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.selected = 0;
+
+        let effects = handle_sources(&mut model, key('u'));
+
+        assert!(model.subscription_fetching);
+        assert!(model.subscription_updates.contains(&sub_id));
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                Effect::UpdateSubscription { id: sub_id },
+                app_log_info("Updating subscription 'Sub'…"),
+            ]
+        );
+    }
+
+    #[test]
+    fn subscription_interval_shows_status() {
+        use crate::config::profile::Subscription;
+        use uuid::Uuid;
+
+        let sub_id = Uuid::new_v4();
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.selected = 0;
+        let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Every12h
+        );
+        assert!(effects.contains(&Effect::SaveConfig));
+        assert!(effects.contains(&app_log_info("Subscription 'Sub' [🗘 12h]")));
+    }
+
+    #[test]
+    fn subscriptions_interval_cycles() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: Uuid::new_v4(),
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Off,
+            last_updated: None,
+        });
+        model.selected = 0;
+
+        let _ = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Every1h
+        );
+        let _ = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Every12h
+        );
+        let _ = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Every1d
+        );
+        let _ = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Every7d
+        );
+        let _ = handle_sources(&mut model, KeyEvent::from(KeyCode::Char('i')));
+        assert_eq!(
+            model.config.subscriptions[0].auto_update,
+            SubscriptionAutoUpdate::Off
+        );
+    }
+
+    #[test]
+    fn confirm_delete_subscription_removes_subscription_and_profiles() {
+        let sub_id = Uuid::new_v4();
+        let mut existing = Profile::new(
+            "Old".to_string(),
+            Protocol::Vless,
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        existing.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![existing]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        // source_rows: [SubscriptionHeader(0), SubscriptionProfile { sub_idx: 0, profile_idx: 0 }]
+        model.selected = 0;
+        model.overlay = Overlay::ConfirmDelete;
+
+        let effects = handle_confirm_delete(&mut model, KeyEvent::from(KeyCode::Enter));
+
+        assert!(model.config.subscriptions.is_empty());
+        assert!(model.config.profiles.is_empty());
+        assert_eq!(model.selected, 0);
+        assert_eq!(
+            effects,
+            vec![
+                Effect::SaveConfig,
+                app_log_info("Subscription 'Sub' deleted")
+            ]
+        );
+    }
+
+    #[test]
+    fn due_subscriptions_are_queued_for_update() {
+        let sub_id = Uuid::new_v4();
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: Some(chrono::Local::now() - chrono::Duration::try_hours(2).unwrap()),
+        });
+
+        let effects = check_due_subscriptions(&mut model);
+
+        assert_eq!(effects, vec![Effect::UpdateSubscription { id: sub_id }]);
+        assert!(model.subscription_updates.contains(&sub_id));
+    }
+
+    #[test]
+    fn non_due_subscriptions_are_skipped() {
+        let sub_id = Uuid::new_v4();
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: Some(chrono::Local::now()),
+        });
+
+        let effects = check_due_subscriptions(&mut model);
+
+        assert!(effects.is_empty());
+        assert!(!model.subscription_updates.contains(&sub_id));
     }
 }

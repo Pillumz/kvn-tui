@@ -4,9 +4,9 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::model::{Model, Overlay};
+use crate::app::model::{Model, Overlay, SourceRow};
 use crate::ui::styles::Theme;
-use crate::ui::widgets::{ProfileList, StatusBar};
+use crate::ui::widgets::StatusBar;
 
 /// Render the full application UI into the terminal frame.
 pub fn draw(frame: &mut Frame, model: &Model) {
@@ -23,7 +23,7 @@ pub fn draw(frame: &mut Frame, model: &Model) {
 
     match model.overlay {
         Overlay::Help => draw_help(frame, area),
-        Overlay::ConfirmDelete => draw_confirm_delete(frame, area),
+        Overlay::ConfirmDelete => draw_confirm_delete(frame, model, area),
         Overlay::Error => draw_error(frame, area, model.status.text()),
         Overlay::RoutingMode => draw_routing_mode(frame, model, area),
         Overlay::GeoRegions => draw_geo_region(frame, model, area),
@@ -31,15 +31,14 @@ pub fn draw(frame: &mut Frame, model: &Model) {
     }
 }
 
-/// Draw the main content area with the profile list and logs.
+/// Draw the main content area with the Sources list and logs.
 fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
-    let chunks = Layout::default()
+    let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    let profile_list = ProfileList::new(model);
-    frame.render_widget(profile_list, chunks[0]);
+    draw_sources(frame, model, content_chunks[0]);
 
     let log_block = Block::default()
         .title(" Logs ")
@@ -47,7 +46,7 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
         .border_style(Theme::border());
 
     // Show the most recent log lines that fit in the available area.
-    let available_height = chunks[1].height.saturating_sub(2) as usize;
+    let available_height = content_chunks[1].height.saturating_sub(2) as usize;
     let start = model.logs.len().saturating_sub(available_height);
     let log_text: Vec<Line> = model
         .logs
@@ -66,7 +65,7 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
     let logs = Paragraph::new(log_text)
         .block(log_block)
         .wrap(Wrap { trim: true });
-    frame.render_widget(logs, chunks[1]);
+    frame.render_widget(logs, content_chunks[1]);
 }
 
 /// Draw the bottom status bar.
@@ -85,12 +84,13 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["k / Up", "Move up"]),
         Row::new(vec!["g", "Go to first"]),
         Row::new(vec!["G", "Go to last"]),
-        Row::new(vec!["Enter", "Connect to selected"]),
+        Row::new(vec!["Enter", "Connect to selected profile"]),
         Row::new(vec!["p", "Paste from clipboard"]),
-        Row::new(vec!["d", "Delete profile"]),
+        Row::new(vec!["d", "Delete selected source"]),
         Row::new(vec!["m", "Routing mode (popup list)"]),
         Row::new(vec!["o", "Geo region"]),
-        Row::new(vec!["u", "Update geoip/geosite databases"]),
+        Row::new(vec!["u", "Update subscription or geo"]),
+        Row::new(vec!["i", "Cycle subscription auto-update"]),
         Row::new(vec!["e", "Open profiles.json in $EDITOR"]),
         Row::new(vec!["a", "Toggle auto-connect"]),
         Row::new(vec!["r", "Reconnect"]),
@@ -100,7 +100,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["?", "Show this help"]),
     ];
 
-    let needed = rows.len() as u16 + 1 + 2; // data rows + header + borders
+    let needed = rows.len() as u16 + 1 + 2 + 1; // data rows + header + borders + padding
     let percent = ((needed * 100) / area.height).clamp(50, 90);
     let popup_area = centered_rect(POPUP_WIDTH_PERCENT, percent, area);
 
@@ -121,13 +121,18 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 }
 
 /// Draw the delete confirmation dialog.
-fn draw_confirm_delete(frame: &mut Frame, area: Rect) {
+fn draw_confirm_delete(frame: &mut Frame, model: &Model, area: Rect) {
+    use crate::app::model::SourceRow;
+    let message = match model.selected_row() {
+        Some(SourceRow::SubscriptionHeader(_)) => "Delete selected subscription and its profiles?",
+        _ => "Delete selected profile?",
+    };
     draw_modal(
         frame,
         area,
         " Confirm ",
         vec![
-            Line::from(Span::styled("Delete selected profile?", Theme::error())),
+            Line::from(Span::styled(message, Theme::error())),
             Line::from(""),
             Line::from("Press y to confirm, n to cancel"),
         ],
@@ -249,6 +254,131 @@ fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
     draw_modal(frame, area, " Geo Region ", lines);
 }
 
+/// Draw the unified Sources list: standalone profiles and subscription trees.
+fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
+    use ratatui::style::Modifier;
+    use ratatui::text::Span;
+
+    let block = Block::default()
+        .title(" Sources ")
+        .borders(Borders::ALL)
+        .border_style(Theme::border());
+
+    let mut lines: Vec<Line> = Vec::new();
+    let rows = model.source_rows();
+
+    if rows.is_empty() {
+        lines.push(Line::from(
+            "No sources. Press p to paste a profile or subscription URL from clipboard.",
+        ));
+    } else {
+        // Standalone profiles group.
+        let standalone: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SourceRow::StandaloneProfile(idx) => Some(*idx),
+                _ => None,
+            })
+            .collect();
+        if !standalone.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  Standalone profiles ({})", standalone.len()),
+                Theme::accent().add_modifier(Modifier::BOLD),
+            )));
+            let last = standalone.len() - 1;
+            for (pos, profile_idx) in standalone.iter().enumerate() {
+                let row_idx = rows
+                    .iter()
+                    .position(|row| matches!(row, SourceRow::StandaloneProfile(idx) if *idx == *profile_idx))
+                    .unwrap_or(0);
+                lines.push(profile_line(model, *profile_idx, row_idx, pos == last));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // Subscription groups.
+        for (sub_idx, sub) in model.config.subscriptions.iter().enumerate() {
+            let header_idx = rows
+                .iter()
+                .position(
+                    |row| matches!(row, SourceRow::SubscriptionHeader(idx) if *idx == sub_idx),
+                )
+                .unwrap_or(0);
+            let is_selected = model.selected == header_idx;
+            let marker = if is_selected { "> " } else { "  " };
+            let header_style = if is_selected {
+                Theme::accent().add_modifier(Modifier::BOLD)
+            } else {
+                Theme::normal()
+            };
+            let sub_profiles: Vec<usize> = rows
+                .iter()
+                .filter_map(|row| match row {
+                    SourceRow::SubscriptionProfile {
+                        sub_idx: s,
+                        profile_idx,
+                    } if *s == sub_idx => Some(*profile_idx),
+                    _ => None,
+                })
+                .collect();
+            let header_text = format!(
+                "{}Subscription: {} ({}) [{}]",
+                marker,
+                sub.name,
+                sub_profiles.len(),
+                sub.auto_update.label(),
+            );
+            lines.push(Line::from(Span::styled(header_text, header_style)));
+
+            let last = sub_profiles.len().saturating_sub(1);
+            for (pos, profile_idx) in sub_profiles.iter().enumerate() {
+                let row_idx = rows
+                    .iter()
+                    .position(|row| {
+                        matches!(row, SourceRow::SubscriptionProfile { sub_idx: s, profile_idx: p } if *s == sub_idx && *p == *profile_idx)
+                    })
+                    .unwrap_or(0);
+                lines.push(profile_line(model, *profile_idx, row_idx, pos == last));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    frame.render_widget(paragraph, area);
+}
+
+/// Build one profile row for the Sources list.
+fn profile_line(model: &Model, profile_idx: usize, row_idx: usize, is_last: bool) -> Line<'static> {
+    use ratatui::style::Modifier;
+    use ratatui::text::Span;
+
+    let profile = &model.config.profiles[profile_idx];
+    let is_selected = model.selected == row_idx;
+    let connected_marker = if model.active_profile_id == Some(profile.id) {
+        " ●"
+    } else {
+        ""
+    };
+    let prefix = if is_selected {
+        "> "
+    } else if is_last {
+        "  └ "
+    } else {
+        "  ├ "
+    };
+    let text = format!(
+        "{}{} {} {}:{}{}",
+        prefix, profile.name, profile.protocol, profile.address, profile.port, connected_marker
+    );
+    let style = if is_selected {
+        Theme::accent().add_modifier(Modifier::BOLD)
+    } else {
+        Theme::normal()
+    };
+    Line::from(Span::styled(text, style))
+}
+
 /// Compute a centered rectangle with given percentage sizes.
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -334,11 +464,12 @@ mod tests {
             ("k / Up", "Move up"),
             ("g", "Go to first"),
             ("G", "Go to last"),
-            ("Enter", "Connect to selected"),
+            ("Enter", "Connect to selected profile"),
             ("p", "Paste from clipboard"),
-            ("d", "Delete profile"),
+            ("d", "Delete selected source"),
             ("m", "Routing mode (popup list)"),
-            ("u", "Update geoip/geosite databases"),
+            ("u", "Update subscription or geo"),
+            ("i", "Cycle subscription auto-update"),
             ("e", "Open profiles.json in $EDITOR"),
             ("r", "Reconnect"),
             ("s", "Stop / disconnect"),
@@ -425,6 +556,63 @@ mod tests {
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::GeoRegions;
         model.geo_region_selected = 1;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    #[test]
+    fn draw_sources_snapshot() {
+        use crate::config::profile::{Subscription, SubscriptionAutoUpdate};
+        use uuid::Uuid;
+
+        let sub_id = Uuid::new_v4();
+        let profiles = vec![
+            Profile::new(
+                "Alpha".to_string(),
+                Protocol::Vless,
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new(
+                "Beta".to_string(),
+                Protocol::Vless,
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+            {
+                let mut p = Profile::new(
+                    "Gamma".to_string(),
+                    Protocol::Vless,
+                    "3.3.3.3".to_string(),
+                    443,
+                    "u3".to_string(),
+                );
+                p.subscription_id = Some(sub_id);
+                p
+            },
+            {
+                let mut p = Profile::new(
+                    "Delta".to_string(),
+                    Protocol::Vless,
+                    "4.4.4.4".to_string(),
+                    443,
+                    "u4".to_string(),
+                );
+                p.subscription_id = Some(sub_id);
+                p
+            },
+        ];
+        let mut model = model_with_profiles(profiles);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Example".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.selected = 0;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
 }
