@@ -3,6 +3,7 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, Wrap};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::model::{Model, Overlay, SourceRow};
 use crate::ui::styles::Theme;
@@ -264,6 +265,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Theme::border());
 
+    let inner_width = area.width.saturating_sub(2) as usize;
     let mut lines: Vec<Line> = Vec::new();
     let rows = model.source_rows();
 
@@ -282,7 +284,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
             .collect();
         if !standalone.is_empty() {
             lines.push(Line::from(Span::styled(
-                format!("  Standalone profiles ({})", standalone.len()),
+                format!("Standalone profiles ({})", standalone.len()),
                 Theme::accent().add_modifier(Modifier::BOLD),
             )));
             let last = standalone.len() - 1;
@@ -291,7 +293,13 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                     .iter()
                     .position(|row| matches!(row, SourceRow::StandaloneProfile(idx) if *idx == *profile_idx))
                     .unwrap_or(0);
-                lines.push(profile_line(model, *profile_idx, row_idx, pos == last));
+                lines.push(profile_line(
+                    model,
+                    *profile_idx,
+                    row_idx,
+                    pos == last,
+                    inner_width,
+                ));
             }
             lines.push(Line::from(""));
         }
@@ -305,9 +313,8 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                 )
                 .unwrap_or(0);
             let is_selected = model.selected == header_idx;
-            let marker = if is_selected { "> " } else { "  " };
             let header_style = if is_selected {
-                Theme::accent().add_modifier(Modifier::BOLD)
+                Theme::selected()
             } else {
                 Theme::normal()
             };
@@ -322,12 +329,16 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                 })
                 .collect();
             let header_text = format!(
-                "{}Subscription: {} ({}) [{}]",
-                marker,
+                "Subscription: {} ({}) [{}]",
                 sub.name,
                 sub_profiles.len(),
                 sub.auto_update.label(),
             );
+            let header_text = if is_selected {
+                pad_to_visual_width(&header_text, inner_width)
+            } else {
+                header_text
+            };
             lines.push(Line::from(Span::styled(header_text, header_style)));
 
             let last = sub_profiles.len().saturating_sub(1);
@@ -338,45 +349,143 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                         matches!(row, SourceRow::SubscriptionProfile { sub_idx: s, profile_idx: p } if *s == sub_idx && *p == *profile_idx)
                     })
                     .unwrap_or(0);
-                lines.push(profile_line(model, *profile_idx, row_idx, pos == last));
+                lines.push(profile_line(
+                    model,
+                    *profile_idx,
+                    row_idx,
+                    pos == last,
+                    inner_width,
+                ));
             }
             lines.push(Line::from(""));
         }
     }
 
-    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
+/// Visual width of a string, counting Unicode characters according to their
+/// display width.
+fn visual_width(s: &str) -> usize {
+    s.chars().filter_map(UnicodeWidthChar::width).sum()
+}
+
+/// Truncate a string to fit within a visual width, appending "..." if truncated.
+fn truncate_to_visual_width(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+    let total_width = visual_width(s);
+    if total_width <= max_width {
+        return s.to_string();
+    }
+    let mut result = String::new();
+    let mut width = 0;
+    let limit = max_width.saturating_sub(3);
+    for ch in s.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + cw > limit {
+            result.push_str("...");
+            return result;
+        }
+        result.push(ch);
+        width += cw;
+    }
+    result
+}
+
+/// Pad a string on the right with spaces up to the target visual width.
+fn pad_to_visual_width(s: &str, target: usize) -> String {
+    let mut result = s.to_string();
+    let width = visual_width(s);
+    if width < target {
+        result.push_str(&" ".repeat(target - width));
+    }
+    result
+}
+
+/// Truncate and pad a string to exactly the target visual width.
+fn fit_to_visual_width(s: &str, target: usize) -> String {
+    pad_to_visual_width(&truncate_to_visual_width(s, target), target)
+}
+
+/// Width reserved for the tree prefix at the start of a profile row.
+const PREFIX_WIDTH: usize = 2;
+/// Minimum and preferred width for the profile name column.
+const MIN_NAME_WIDTH: usize = 8;
+const NAME_WIDTH: usize = 14;
+/// Width reserved for the protocol column.
+const PROTOCOL_WIDTH: usize = 6;
+/// Minimum width for the address:port column.
+const MIN_ADDR_WIDTH: usize = 11;
+/// Fixed overhead: prefix + protocol + two spaces between columns.
+const FIXED_OVERHEAD: usize = PREFIX_WIDTH + PROTOCOL_WIDTH + 2;
+
 /// Build one profile row for the Sources list.
-fn profile_line(model: &Model, profile_idx: usize, row_idx: usize, is_last: bool) -> Line<'static> {
-    use ratatui::style::Modifier;
+fn profile_line(
+    model: &Model,
+    profile_idx: usize,
+    row_idx: usize,
+    is_last: bool,
+    inner_width: usize,
+) -> Line<'static> {
     use ratatui::text::Span;
 
     let profile = &model.config.profiles[profile_idx];
     let is_selected = model.selected == row_idx;
-    let connected_marker = if model.active_profile_id == Some(profile.id) {
-        " ●"
-    } else {
-        ""
-    };
-    let prefix = if is_selected {
-        "> "
-    } else if is_last {
-        "  └ "
-    } else {
-        "  ├ "
-    };
-    let text = format!(
-        "{}{} {} {}:{}{}",
-        prefix, profile.name, profile.protocol, profile.address, profile.port, connected_marker
-    );
-    let style = if is_selected {
-        Theme::accent().add_modifier(Modifier::BOLD)
+
+    let is_connected = model.active_profile_id == Some(profile.id);
+
+    let prefix = if is_last { "└ " } else { "├ " };
+
+    let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
+    let name_width = remaining
+        .saturating_sub(MIN_ADDR_WIDTH)
+        .clamp(MIN_NAME_WIDTH, NAME_WIDTH);
+    let addr_width = remaining.saturating_sub(name_width).max(MIN_ADDR_WIDTH);
+
+    let name_col = fit_to_visual_width(&profile.name, name_width);
+    let protocol_col = fit_to_visual_width(&profile.protocol.to_string(), PROTOCOL_WIDTH);
+    let addr_port = format!("{}:{}", profile.address, profile.port);
+    let addr_col = truncate_to_visual_width(&addr_port, addr_width);
+
+    let style = if is_selected && is_connected {
+        Theme::selected_connected()
+    } else if is_selected {
+        Theme::selected()
+    } else if is_connected {
+        Theme::success()
     } else {
         Theme::normal()
     };
-    Line::from(Span::styled(text, style))
+
+    let addr_col_padded = if is_selected {
+        pad_to_visual_width(&addr_col, addr_width)
+    } else {
+        addr_col
+    };
+
+    let used = PREFIX_WIDTH + name_width + 1 + PROTOCOL_WIDTH + 1 + visual_width(&addr_col_padded);
+    let trailing = inner_width.saturating_sub(used);
+
+    let mut spans = vec![
+        Span::styled(prefix, style),
+        Span::styled(name_col, style),
+        Span::styled(" ", style),
+        Span::styled(protocol_col, style),
+        Span::styled(" ", style),
+        Span::styled(addr_col_padded, style),
+    ];
+    if is_selected && trailing > 0 {
+        spans.push(Span::styled(" ".repeat(trailing), style));
+    }
+    Line::from(spans)
 }
 
 /// Compute a centered rectangle with given percentage sizes.
@@ -613,6 +722,55 @@ mod tests {
             last_updated: None,
         });
         model.selected = 0;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    #[test]
+    fn draw_sources_long_name_truncated() {
+        let profiles = vec![
+            Profile::new(
+                "VeryLongProfileNameThatMustBeTruncated".to_string(),
+                Protocol::Vless,
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new(
+                "Second".to_string(),
+                Protocol::Vless,
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+        ];
+        let mut model = model_with_profiles(profiles);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.selected = 0;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    #[test]
+    fn draw_sources_connected_profile_colored() {
+        let mut model = model_with_profiles(vec![
+            Profile::new(
+                "Alpha".to_string(),
+                Protocol::Vless,
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new(
+                "Beta".to_string(),
+                Protocol::Vless,
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+        ]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[1].id);
+        model.selected = 1;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
 }

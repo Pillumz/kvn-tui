@@ -19,6 +19,9 @@ Thumbs.db
 # Project cache
 cache.db
 
+# Claude Code local settings (personal overrides, not for team)
+.claude/settings.local.json
+
 # Arch package build artifacts
 pkg/arch/pkg/
 pkg/arch/src/

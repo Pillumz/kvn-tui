@@ -37,6 +37,9 @@ dirs = "6.0"
 # URL parsing
 url = "2.5"
 
+# Unicode width for visual truncation
+unicode-width = "0.2"
+
 # Chrono for timestamps
 chrono = { version = "0.4", features = ["clock", "serde"], default-features = false }
 

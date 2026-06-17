@@ -38,6 +38,22 @@ impl Theme {
         Style::default().fg(Color::DarkGray)
     }
 
+    /// Style for a selected/hovered row (background highlight).
+    pub fn selected() -> Style {
+        Style::default()
+            .bg(Color::Rgb(45, 45, 85))
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Style for a selected/hovered row that is also the active connection.
+    pub fn selected_connected() -> Style {
+        Style::default()
+            .bg(Color::Rgb(0, 55, 30))
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Style for help popup background.
     pub fn popup_bg() -> Style {
         Style::default().bg(Color::Black)
