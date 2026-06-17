@@ -386,9 +386,8 @@ fn fit_to_visual_width(s: &str, target: usize) -> String {
 
 /// Width reserved for the tree prefix at the start of a profile row.
 const PREFIX_WIDTH: usize = 2;
-/// Minimum and preferred width for the profile name column.
+/// Minimum width for the profile name column.
 const MIN_NAME_WIDTH: usize = 8;
-const NAME_WIDTH: usize = 14;
 /// Width reserved for the protocol column.
 const PROTOCOL_WIDTH: usize = 6;
 /// Minimum width for the address:port column.
@@ -413,15 +412,14 @@ fn profile_line(
 
     let prefix = if is_last { "└ " } else { "├ " };
 
+    let addr_port = format!("{}:{}", profile.address, profile.port);
     let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
-    let name_width = remaining
-        .saturating_sub(MIN_ADDR_WIDTH)
-        .clamp(MIN_NAME_WIDTH, NAME_WIDTH);
-    let addr_width = remaining.saturating_sub(name_width).max(MIN_ADDR_WIDTH);
+    let ideal_addr = visual_width(&addr_port).max(MIN_ADDR_WIDTH);
+    let addr_width = ideal_addr.min(remaining.saturating_sub(MIN_NAME_WIDTH));
+    let name_width = remaining.saturating_sub(addr_width).max(MIN_NAME_WIDTH);
 
     let name_col = fit_to_visual_width(&profile.name, name_width);
     let protocol_col = fit_to_visual_width(&profile.protocol.to_string(), PROTOCOL_WIDTH);
-    let addr_port = format!("{}:{}", profile.address, profile.port);
     let addr_col = truncate_to_visual_width(&addr_port, addr_width);
 
     let style = if is_selected && is_connected {

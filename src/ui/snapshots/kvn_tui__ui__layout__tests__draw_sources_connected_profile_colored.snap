@@ -4,8 +4,8 @@ expression: "snapshot_terminal(&model, 80, 20)"
 ---
 ┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
 │Standalone profiles (2)               ││                                      │
-│├ Alpha          vless  1.1.1.1:443   ││                                      │
-│└ Beta           vless  2.2.2.2:443   ││                                      │
+│├ Alpha             vless  1.1.1.1:443││                                      │
+│└ Beta              vless  2.2.2.2:443││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
