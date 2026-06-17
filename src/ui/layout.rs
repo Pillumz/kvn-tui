@@ -181,85 +181,67 @@ fn draw_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
 
 /// Draw the routing mode selection modal.
 fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
-    use ratatui::style::Modifier;
-    use ratatui::text::Span;
-
     let modes = model.config.settings.geo_routing.available_modes();
-    let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled("Select routing mode", Theme::accent())),
-        Line::from(""),
-    ];
-
-    for (i, mode) in modes.iter().enumerate() {
-        let marker = if i == model.routing_selected {
-            "> "
-        } else {
-            "  "
-        };
-        let text = format!("{}{}", marker, mode.as_str());
-        let style = if i == model.routing_selected {
-            Theme::accent().add_modifier(Modifier::BOLD)
-        } else {
-            Theme::normal()
-        };
-        lines.push(Line::from(Span::styled(text, style)));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from("j/k navigate, Enter confirm, Esc cancel"));
-
-    draw_modal(frame, area, " Routing Mode ", lines);
+    let labels: Vec<&str> = modes.iter().map(|m| m.as_str()).collect();
+    draw_selection_modal(
+        frame,
+        area,
+        "Select routing mode",
+        " Routing Mode ",
+        &labels,
+        model.routing_selected,
+    );
 }
 
 /// Draw the geo region selection modal.
 fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
-    use crate::config::profile::GeoRegion;
-    use ratatui::style::Modifier;
-    use ratatui::text::Span;
-
-    let regions = [
-        GeoRegion::Ru,
-        GeoRegion::Cn,
-        GeoRegion::Ir,
-        GeoRegion::Global,
-    ];
     let labels = [
         "🇷🇺 Russia",
         "🇨🇳 China",
         "🇮🇷 Iran",
         "🌍 Global (no geo rules)",
     ];
+    draw_selection_modal(
+        frame,
+        area,
+        "Select geo region",
+        " Geo Region ",
+        &labels,
+        model.geo_region_selected,
+    );
+}
+
+fn draw_selection_modal(
+    frame: &mut Frame,
+    area: Rect,
+    heading: &str,
+    modal_title: &str,
+    items: &[&str],
+    selected: usize,
+) {
     let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled("Select geo region", Theme::accent())),
+        Line::from(Span::styled(heading, Theme::accent())),
         Line::from(""),
     ];
-
-    for (i, (&_region, label)) in regions.iter().zip(labels.iter()).enumerate() {
-        let marker = if i == model.geo_region_selected {
-            "> "
-        } else {
-            "  "
-        };
-        let text = format!("{}{}", marker, label);
-        let style = if i == model.geo_region_selected {
+    for (i, label) in items.iter().enumerate() {
+        let marker = if i == selected { "> " } else { "  " };
+        let style = if i == selected {
             Theme::accent().add_modifier(Modifier::BOLD)
         } else {
             Theme::normal()
         };
-        lines.push(Line::from(Span::styled(text, style)));
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", marker, label),
+            style,
+        )));
     }
-
     lines.push(Line::from(""));
     lines.push(Line::from("j/k navigate, Enter confirm, Esc cancel"));
-
-    draw_modal(frame, area, " Geo Region ", lines);
+    draw_modal(frame, area, modal_title, lines);
 }
 
 /// Draw the unified Sources list: standalone profiles and subscription trees.
 fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
-    use ratatui::style::Modifier;
-    use ratatui::text::Span;
-
     let block = Block::default()
         .title(" Sources ")
         .borders(Borders::ALL)
@@ -274,29 +256,36 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
             "No sources. Press p to paste a profile or subscription URL from clipboard.",
         ));
     } else {
+        // Single pass over rows to collect indices — avoids O(n²) position() searches.
+        let sub_count = model.config.subscriptions.len();
+        let mut standalone: Vec<(usize, usize)> = Vec::new(); // (row_idx, profile_idx)
+        let mut sub_header_idx = vec![0usize; sub_count];
+        let mut sub_profile_rows: Vec<Vec<(usize, usize)>> = vec![Vec::new(); sub_count];
+        for (i, row) in rows.iter().enumerate() {
+            match row {
+                SourceRow::StandaloneProfile(idx) => standalone.push((i, *idx)),
+                SourceRow::SubscriptionHeader(idx) => sub_header_idx[*idx] = i,
+                SourceRow::SubscriptionProfile {
+                    sub_idx,
+                    profile_idx,
+                } => {
+                    sub_profile_rows[*sub_idx].push((i, *profile_idx));
+                }
+            }
+        }
+
         // Standalone profiles group.
-        let standalone: Vec<usize> = rows
-            .iter()
-            .filter_map(|row| match row {
-                SourceRow::StandaloneProfile(idx) => Some(*idx),
-                _ => None,
-            })
-            .collect();
         if !standalone.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("Standalone profiles ({})", standalone.len()),
                 Theme::accent().add_modifier(Modifier::BOLD),
             )));
             let last = standalone.len() - 1;
-            for (pos, profile_idx) in standalone.iter().enumerate() {
-                let row_idx = rows
-                    .iter()
-                    .position(|row| matches!(row, SourceRow::StandaloneProfile(idx) if *idx == *profile_idx))
-                    .unwrap_or(0);
+            for (pos, (row_idx, profile_idx)) in standalone.iter().enumerate() {
                 lines.push(profile_line(
                     model,
                     *profile_idx,
-                    row_idx,
+                    *row_idx,
                     pos == last,
                     inner_width,
                 ));
@@ -306,32 +295,18 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
 
         // Subscription groups.
         for (sub_idx, sub) in model.config.subscriptions.iter().enumerate() {
-            let header_idx = rows
-                .iter()
-                .position(
-                    |row| matches!(row, SourceRow::SubscriptionHeader(idx) if *idx == sub_idx),
-                )
-                .unwrap_or(0);
+            let header_idx = sub_header_idx[sub_idx];
             let is_selected = model.selected == header_idx;
             let header_style = if is_selected {
                 Theme::selected()
             } else {
                 Theme::normal()
             };
-            let sub_profiles: Vec<usize> = rows
-                .iter()
-                .filter_map(|row| match row {
-                    SourceRow::SubscriptionProfile {
-                        sub_idx: s,
-                        profile_idx,
-                    } if *s == sub_idx => Some(*profile_idx),
-                    _ => None,
-                })
-                .collect();
+            let profiles = &sub_profile_rows[sub_idx];
             let header_text = format!(
                 "Subscription: {} ({}) [{}]",
                 sub.name,
-                sub_profiles.len(),
+                profiles.len(),
                 sub.auto_update.label(),
             );
             let header_text = if is_selected {
@@ -341,18 +316,12 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
             };
             lines.push(Line::from(Span::styled(header_text, header_style)));
 
-            let last = sub_profiles.len().saturating_sub(1);
-            for (pos, profile_idx) in sub_profiles.iter().enumerate() {
-                let row_idx = rows
-                    .iter()
-                    .position(|row| {
-                        matches!(row, SourceRow::SubscriptionProfile { sub_idx: s, profile_idx: p } if *s == sub_idx && *p == *profile_idx)
-                    })
-                    .unwrap_or(0);
+            let last = profiles.len().saturating_sub(1);
+            for (pos, (row_idx, profile_idx)) in profiles.iter().enumerate() {
                 lines.push(profile_line(
                     model,
                     *profile_idx,
-                    row_idx,
+                    *row_idx,
                     pos == last,
                     inner_width,
                 ));

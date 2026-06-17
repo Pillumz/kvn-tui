@@ -21,10 +21,6 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         }
         Msg::SystemResumed => {
             if model.connection == ConnectionState::Connected {
-                let log_effect = set_status(
-                    model,
-                    crate::app::model::AppStatus::Info("Resumed — reconnecting…".into()),
-                );
                 let profile = model.selected_profile().cloned();
                 let settings = model.config.settings.clone();
                 let mut effects = profile
@@ -35,9 +31,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
                         }]
                     })
                     .unwrap_or_default();
-                if let Some(e) = log_effect {
-                    effects.push(e);
-                }
+                push_status(
+                    &mut effects,
+                    model,
+                    crate::app::model::AppStatus::Info("Resumed — reconnecting…".into()),
+                );
                 effects
             } else {
                 vec![]
@@ -52,12 +50,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
                 let profile_id = profile.id;
                 let profile_name = profile.name.clone();
                 model.active_profile_id = Some(profile_id);
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!("Connected to {}", profile_name)),
-                ) {
-                    effects.push(e);
-                }
+                );
                 // Persist last connected profile for auto-connect on next startup.
                 if model.config.settings.last_connected_profile != Some(profile_id) {
                     model.config.settings.last_connected_profile = Some(profile_id);
@@ -70,14 +67,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::ConnectFailed(err) => {
             model.connection = ConnectionState::Idle;
             model.overlay = Overlay::Error;
-            let log_effect = set_status(
+            let mut effects = vec![Effect::BroadcastState];
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Error(format!("Connection failed: {}", err)),
             );
-            let mut effects = vec![Effect::BroadcastState];
-            if let Some(e) = log_effect {
-                effects.push(e);
-            }
             effects
         }
 
@@ -111,6 +106,12 @@ fn set_status(model: &mut Model, status: AppStatus) -> Option<Effect> {
     effect
 }
 
+fn push_status(effects: &mut Vec<Effect>, model: &mut Model, status: AppStatus) {
+    if let Some(e) = set_status(model, status) {
+        effects.push(e);
+    }
+}
+
 fn handle_config_reloaded(
     model: &mut Model,
     result: Result<crate::config::profile::Config, String>,
@@ -120,17 +121,20 @@ fn handle_config_reloaded(
             model.selected = crate::app::model::row_for_profile(&config, config.resolve_selected());
             model.config = config;
             let mut effects = vec![Effect::BroadcastState];
-            if let Some(e) = set_status(model, AppStatus::Info("Profiles reloaded".into())) {
-                effects.push(e);
-            }
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("Profiles reloaded".into()),
+            );
             effects
         }
         Err(e) => {
             let mut effects = vec![Effect::BroadcastState];
-            if let Some(e) = set_status(model, AppStatus::Error(format!("Failed to reload: {}", e)))
-            {
-                effects.push(e);
-            }
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Error(format!("Failed to reload: {}", e)),
+            );
             effects
         }
     }
@@ -207,79 +211,14 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let mut effects = Vec::new();
     match key.code {
         // Navigation
-        KeyCode::Char('j') | KeyCode::Down => {
-            model.select_next();
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            model.select_prev();
-        }
-        KeyCode::Char('g') => {
-            model.select_first();
-        }
-        KeyCode::Char('G') => {
-            model.select_last();
-        }
+        KeyCode::Char('j') | KeyCode::Down => model.select_next(),
+        KeyCode::Char('k') | KeyCode::Up => model.select_prev(),
+        KeyCode::Char('g') => model.select_first(),
+        KeyCode::Char('G') => model.select_last(),
 
         // Actions
-        KeyCode::Enter => {
-            if let Some(profile) = model.selected_profile() {
-                if let Some(e) = set_status(
-                    model,
-                    crate::app::model::AppStatus::Info(format!("Connecting to {}…", profile.name)),
-                ) {
-                    effects.push(e);
-                }
-                model.connection = ConnectionState::Connecting;
-            } else if let Some(sub) = model.selected_subscription() {
-                let id = sub.id;
-                let name = sub.name.clone();
-                // If the subscription already has profiles, connect to the first one.
-                if let Some(profile) = model
-                    .config
-                    .profiles
-                    .iter()
-                    .find(|p| p.subscription_id == Some(id))
-                    .cloned()
-                {
-                    if let Some(e) = set_status(
-                        model,
-                        crate::app::model::AppStatus::Info(format!(
-                            "Connecting to {}…",
-                            profile.name
-                        )),
-                    ) {
-                        effects.push(e);
-                    }
-                    model.connection = ConnectionState::Connecting;
-                } else {
-                    model.subscription_fetching = true;
-                    model.subscription_updates.insert(id);
-                    if let Some(e) = set_status(
-                        model,
-                        crate::app::model::AppStatus::Info(format!(
-                            "Updating subscription '{}'…",
-                            name
-                        )),
-                    ) {
-                        effects.push(e);
-                    }
-                    return vec![Effect::SaveConfig, Effect::UpdateSubscription { id }]
-                        .into_iter()
-                        .chain(effects)
-                        .collect();
-                }
-            } else if let Some(e) = set_status(
-                model,
-                crate::app::model::AppStatus::Info(
-                    "No sources. Press p to paste or e to edit.".into(),
-                ),
-            ) {
-                effects.push(e);
-            }
-        }
-        KeyCode::Char('p') => {
-            return vec![Effect::PasteClipboard];
-        }
+        KeyCode::Enter => return handle_enter_on_sources(model),
+        KeyCode::Char('p') => return vec![Effect::PasteClipboard],
         KeyCode::Char('d')
             if model.selected_profile().is_some() || model.selected_subscription().is_some() =>
         {
@@ -293,50 +232,7 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 .position(|m| *m == model.config.settings.geo_routing.mode())
                 .unwrap_or(0);
         }
-        KeyCode::Char('u') => {
-            if let Some(idx) = model.selected_subscription_index() {
-                if let Some(sub) = model.config.subscriptions.get(idx) {
-                    let id = sub.id;
-                    let name = sub.name.clone();
-                    model.subscription_fetching = true;
-                    model.subscription_updates.insert(id);
-                    if let Some(e) = set_status(
-                        model,
-                        crate::app::model::AppStatus::Info(format!(
-                            "Updating subscription '{}'…",
-                            name
-                        )),
-                    ) {
-                        effects.push(e);
-                    }
-                    return vec![Effect::SaveConfig, Effect::UpdateSubscription { id }]
-                        .into_iter()
-                        .chain(effects)
-                        .collect();
-                }
-            } else if !model.geo_updating {
-                if model.config.settings.geo_routing.current_region == Some(GeoRegion::Global) {
-                    if let Some(e) = set_status(
-                        model,
-                        crate::app::model::AppStatus::Info(
-                            "Geo updates are not available in Global region".to_string(),
-                        ),
-                    ) {
-                        effects.push(e);
-                    }
-                    return effects;
-                }
-                model.geo_updating = true;
-                if let Some(e) = set_status(
-                    model,
-                    crate::app::model::AppStatus::Info("Checking for geo updates...".to_string()),
-                ) {
-                    effects.push(e);
-                }
-                effects.push(Effect::DownloadGeo);
-                return effects;
-            }
-        }
+        KeyCode::Char('u') => return handle_update_key(model),
         KeyCode::Char('i') => {
             if let Some(idx) = model.selected_subscription_index() {
                 let (name, label) = if let Some(sub) = model.config.subscriptions.get_mut(idx) {
@@ -346,15 +242,14 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     return effects;
                 };
                 let mut effects = vec![Effect::SaveConfig];
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!(
                         "Subscription '{}' [{}]",
                         name, label
                     )),
-                ) {
-                    effects.push(e);
-                }
+                );
                 return effects;
             }
         }
@@ -375,15 +270,14 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('r') if model.connection == ConnectionState::Connected => {
             if let Some(profile) = model.selected_profile() {
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!(
                         "Reconnecting to {}…",
                         profile.name
                     )),
-                ) {
-                    effects.push(e);
-                }
+                );
             }
             model.connection = ConnectionState::Connecting;
         }
@@ -393,15 +287,14 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('a') => {
             let new_val = !model.config.settings.auto_connect;
             model.config.settings.auto_connect = new_val;
-            if let Some(e) = set_status(
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Info(format!(
                     "Auto-connect {}",
                     if new_val { "enabled" } else { "disabled" }
                 )),
-            ) {
-                effects.push(e);
-            }
+            );
             effects.push(Effect::SaveConfig);
             return effects;
         }
@@ -410,6 +303,92 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('?') => model.overlay = Overlay::Help,
 
         _ => {}
+    }
+    effects
+}
+
+fn handle_enter_on_sources(model: &mut Model) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(profile) = model.selected_profile() {
+        push_status(
+            &mut effects,
+            model,
+            crate::app::model::AppStatus::Info(format!("Connecting to {}…", profile.name)),
+        );
+        model.connection = ConnectionState::Connecting;
+    } else if let Some(sub) = model.selected_subscription() {
+        let id = sub.id;
+        let name = sub.name.clone();
+        // If the subscription already has profiles, connect to the first one.
+        if let Some(profile) = model
+            .config
+            .profiles
+            .iter()
+            .find(|p| p.subscription_id == Some(id))
+            .cloned()
+        {
+            push_status(
+                &mut effects,
+                model,
+                crate::app::model::AppStatus::Info(format!("Connecting to {}…", profile.name)),
+            );
+            model.connection = ConnectionState::Connecting;
+        } else {
+            model.subscription_fetching = true;
+            model.subscription_updates.insert(id);
+            let mut result = vec![Effect::SaveConfig, Effect::UpdateSubscription { id }];
+            push_status(
+                &mut result,
+                model,
+                crate::app::model::AppStatus::Info(format!("Updating subscription '{}'…", name)),
+            );
+            return result;
+        }
+    } else {
+        push_status(
+            &mut effects,
+            model,
+            crate::app::model::AppStatus::Info("No sources. Press p to paste or e to edit.".into()),
+        );
+    }
+    effects
+}
+
+fn handle_update_key(model: &mut Model) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(idx) = model.selected_subscription_index() {
+        if let Some(sub) = model.config.subscriptions.get(idx) {
+            let id = sub.id;
+            let name = sub.name.clone();
+            model.subscription_fetching = true;
+            model.subscription_updates.insert(id);
+            let mut result = vec![Effect::SaveConfig, Effect::UpdateSubscription { id }];
+            push_status(
+                &mut result,
+                model,
+                crate::app::model::AppStatus::Info(format!("Updating subscription '{}'…", name)),
+            );
+            return result;
+        }
+    } else if !model.geo_updating {
+        if model.config.settings.geo_routing.current_region == Some(GeoRegion::Global) {
+            push_status(
+                &mut effects,
+                model,
+                crate::app::model::AppStatus::Info(
+                    "Geo updates are not available in Global region".to_string(),
+                ),
+            );
+            return effects;
+        }
+        model.geo_updating = true;
+        push_status(
+            &mut effects,
+            model,
+            crate::app::model::AppStatus::Info("Checking for geo updates...".to_string()),
+        );
+        effects.push(Effect::DownloadGeo);
+        return effects;
     }
     effects
 }
@@ -426,15 +405,14 @@ fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     model.delete_selected();
                     let mut effects = vec![Effect::SaveConfig];
                     if let Some(name) = name {
-                        if let Some(e) = set_status(
+                        push_status(
+                            &mut effects,
                             model,
                             crate::app::model::AppStatus::Info(format!(
                                 "Profile '{}' deleted",
                                 name
                             )),
-                        ) {
-                            effects.push(e);
-                        }
+                        );
                     }
                     return effects;
                 }
@@ -443,15 +421,14 @@ fn handle_confirm_delete(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     model.delete_selected();
                     let mut effects = vec![Effect::SaveConfig];
                     if let Some(name) = name {
-                        if let Some(e) = set_status(
+                        push_status(
+                            &mut effects,
                             model,
                             crate::app::model::AppStatus::Info(format!(
                                 "Subscription '{}' deleted",
                                 name
                             )),
-                        ) {
-                            effects.push(e);
-                        }
+                        );
                     }
                     return effects;
                 }
@@ -540,19 +517,22 @@ fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.config.settings.geo_routing.set_mode(mode);
                 model.overlay = Overlay::None;
                 let mut effects = vec![Effect::SaveConfig];
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!("Routing mode: {}", mode.as_str())),
-                ) {
-                    effects.push(e);
-                }
+                );
 
                 if changed && model.connection == ConnectionState::Connected {
                     model.connection = ConnectionState::Connecting;
-                    let text = format!("Mode changed to {} — reconnecting", mode.as_str());
-                    if let Some(e) = set_status(model, crate::app::model::AppStatus::Info(text)) {
-                        effects.push(e);
-                    }
+                    push_status(
+                        &mut effects,
+                        model,
+                        crate::app::model::AppStatus::Info(format!(
+                            "Mode changed to {} — reconnecting",
+                            mode.as_str()
+                        )),
+                    );
                 }
                 return effects;
             }
@@ -596,23 +576,21 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 if changed {
                     effects.push(Effect::RefreshGeoLastUpdated);
                 }
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!("Geo region: {}", region.as_str())),
-                ) {
-                    effects.push(e);
-                }
+                );
 
                 // If the region changed and is not Global, check whether geo databases
                 // are present and download them automatically if they are missing.
                 if changed && region != GeoRegion::Global {
                     model.geo_updating = true;
-                    if let Some(e) = set_status(
+                    push_status(
+                        &mut effects,
                         model,
                         crate::app::model::AppStatus::Info("Checking geo databases...".to_string()),
-                    ) {
-                        effects.push(e);
-                    }
+                    );
                     effects.push(Effect::DownloadGeoIfMissing);
                 }
 
@@ -629,15 +607,14 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     }
                     let new_mode = model.config.settings.geo_routing.mode();
                     if new_mode != old_mode {
-                        if let Some(e) = set_status(
+                        push_status(
+                            &mut effects,
                             model,
                             crate::app::model::AppStatus::Info(format!(
                                 "Routing mode: {}",
                                 new_mode.as_str()
                             )),
-                        ) {
-                            effects.push(e);
-                        }
+                        );
                     }
                 }
 
@@ -653,15 +630,14 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                         model.selected = crate::app::model::row_for_profile(&model.config, idx);
                         model.connection = ConnectionState::Connecting;
                         if let Some(profile) = model.config.profiles.get(idx) {
-                            if let Some(e) = set_status(
+                            push_status(
+                                &mut effects,
                                 model,
                                 crate::app::model::AppStatus::Info(format!(
                                     "Auto-connecting to {}…",
                                     profile.name
                                 )),
-                            ) {
-                                effects.push(e);
-                            }
+                            );
                         }
                     }
                 }
@@ -693,33 +669,30 @@ fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
         Ok(profile) => {
             if model.has_duplicate(&profile) {
                 let mut effects = Vec::new();
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Error("Profile already exists".into()),
-                ) {
-                    effects.push(e);
-                }
+                );
                 return effects;
             }
             let name = profile.name.clone();
             model.add_profile(profile);
             let mut effects = vec![Effect::SaveConfig];
-            if let Some(e) = set_status(
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Info(format!("Pasted profile: {}", name)),
-            ) {
-                effects.push(e);
-            }
+            );
             effects
         }
         Err(e) => {
             let mut effects = Vec::new();
-            if let Some(e) = set_status(
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Error(format!("Invalid URI: {}", e)),
-            ) {
-                effects.push(e);
-            }
+            );
             effects
         }
     }
@@ -744,15 +717,14 @@ fn add_and_fetch_subscription(model: &mut Model, url: &str) -> Vec<Effect> {
     model.subscription_updates.insert(id);
 
     let mut effects = vec![Effect::SaveConfig, Effect::UpdateSubscription { id }];
-    if let Some(e) = set_status(
+    push_status(
+        &mut effects,
         model,
         crate::app::model::AppStatus::Info(format!(
             "Added subscription '{}' and fetching profiles…",
             name
         )),
-    ) {
-        effects.push(e);
-    }
+    );
     effects
 }
 
@@ -815,20 +787,20 @@ fn handle_subscription_result(
                 effects.push(Effect::SaveConfig);
             }
             if imported > 0 {
-                if let Some(e) = set_status(
+                push_status(
+                    &mut effects,
                     model,
                     crate::app::model::AppStatus::Info(format!(
                         "Imported {} profile(s) from subscription",
                         imported
                     )),
-                ) {
-                    effects.push(e);
-                }
-            } else if let Some(e) = set_status(
-                model,
-                crate::app::model::AppStatus::Info("No new profiles in subscription".into()),
-            ) {
-                effects.push(e);
+                );
+            } else {
+                push_status(
+                    &mut effects,
+                    model,
+                    crate::app::model::AppStatus::Info("No new profiles in subscription".into()),
+                );
             }
             effects
         }
@@ -837,12 +809,11 @@ fn handle_subscription_result(
             if managed {
                 effects.push(Effect::SaveConfig);
             }
-            if let Some(e) = set_status(
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Error(format!("Subscription failed: {}", err)),
-            ) {
-                effects.push(e);
-            }
+            );
             effects
         }
     }
@@ -865,12 +836,11 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
                 });
                 model.logs.push_back(text);
             }
-            if let Some(e) = set_status(
+            push_status(
+                &mut log_effects,
                 model,
                 crate::app::model::AppStatus::Info("Geo databases updated".into()),
-            ) {
-                log_effects.push(e);
-            }
+            );
             if model.connection == ConnectionState::Connected {
                 model
                     .logs
@@ -881,19 +851,20 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
         }
         GeoResult::UpToDate => {
             let mut effects = Vec::new();
-            if let Some(e) = set_status(
+            push_status(
+                &mut effects,
                 model,
                 crate::app::model::AppStatus::Info("Geo databases are up to date".into()),
-            ) {
-                effects.push(e);
-            }
+            );
             effects
         }
         GeoResult::Error(err) => {
             let mut effects = Vec::new();
-            if let Some(e) = set_status(model, crate::app::model::AppStatus::Error(err)) {
-                effects.push(e);
-            }
+            push_status(
+                &mut effects,
+                model,
+                crate::app::model::AppStatus::Error(err),
+            );
             effects
         }
     };

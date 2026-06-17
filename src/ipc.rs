@@ -72,7 +72,10 @@ impl IpcServer {
     pub fn broadcast(&self, snapshot: &StateSnapshot) {
         let json = match serde_json::to_string(snapshot) {
             Ok(s) => s + "\n",
-            Err(_) => return,
+            Err(e) => {
+                tracing::warn!("Failed to serialize state snapshot: {e}");
+                return;
+            }
         };
         let mut clients = self.clients.lock().unwrap();
         let mut to_remove = Vec::new();
