@@ -22,6 +22,10 @@ pub enum Msg {
     IpcCommand(IpcCommand),
     StateUpdate(StateSnapshot),
     ConfigReloaded(Result<crate::config::profile::Config, String>),
+    KillSwitchApplied {
+        enabled: bool,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug)]

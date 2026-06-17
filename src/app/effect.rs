@@ -26,4 +26,7 @@ pub enum Effect {
         message: String,
     },
     ReloadConfig,
+    ApplyKillSwitch {
+        enabled: bool,
+    },
 }

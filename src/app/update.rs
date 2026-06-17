@@ -83,7 +83,42 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::IpcCommand(cmd) => handle_ipc_command(model, cmd),
         Msg::StateUpdate(_) => vec![],
         Msg::ConfigReloaded(result) => handle_config_reloaded(model, result),
+        Msg::KillSwitchApplied { enabled, error } => {
+            handle_kill_switch_applied(model, enabled, error)
+        }
     }
+}
+
+fn handle_kill_switch_applied(
+    model: &mut Model,
+    enabled: bool,
+    error: Option<String>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    match error {
+        None => {
+            model.config.settings.kill_switch = enabled;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info(format!(
+                    "Kill switch {}",
+                    if enabled { "enabled" } else { "disabled" }
+                )),
+            );
+            effects.push(Effect::SaveConfig);
+            effects.push(Effect::BroadcastState);
+        }
+        Some(err) => {
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Error(format!("Kill switch: {}", err)),
+            );
+            effects.push(Effect::BroadcastState);
+        }
+    }
+    effects
 }
 
 /// Set the application status (pure, in-memory) and return an effect that
@@ -296,6 +331,19 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 )),
             );
             effects.push(Effect::SaveConfig);
+            return effects;
+        }
+        KeyCode::Char('K') => {
+            let new_val = !model.config.settings.kill_switch;
+            push_status(
+                &mut effects,
+                model,
+                crate::app::model::AppStatus::Info(format!(
+                    "Kill switch {}…",
+                    if new_val { "enabling" } else { "disabling" }
+                )),
+            );
+            effects.push(Effect::ApplyKillSwitch { enabled: new_val });
             return effects;
         }
 
@@ -1719,6 +1767,61 @@ mod tests {
             effects,
             vec![app_log_info("Auto-connect disabled"), Effect::SaveConfig]
         );
+    }
+
+    #[test]
+    fn toggle_kill_switch_emits_apply_effect_and_does_not_flip_bool() {
+        let mut model = model_with_profiles(vec![]);
+        assert!(!model.config.settings.kill_switch);
+
+        let effects = handle_sources(&mut model, key('K'));
+        // Bool is NOT flipped synchronously — it waits for KillSwitchApplied.
+        assert!(!model.config.settings.kill_switch);
+        assert!(model.status.text().contains("enabling"));
+        assert_eq!(
+            effects,
+            vec![
+                app_log_info("Kill switch enabling…"),
+                Effect::ApplyKillSwitch { enabled: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn kill_switch_applied_success_flips_and_saves() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = update(
+            &mut model,
+            Msg::KillSwitchApplied {
+                enabled: true,
+                error: None,
+            },
+        );
+        assert!(model.config.settings.kill_switch);
+        assert!(model.status.text().contains("enabled"));
+        assert_eq!(
+            effects,
+            vec![
+                app_log_info("Kill switch enabled"),
+                Effect::SaveConfig,
+                Effect::BroadcastState,
+            ]
+        );
+    }
+
+    #[test]
+    fn kill_switch_applied_error_keeps_bool_unchanged() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = update(
+            &mut model,
+            Msg::KillSwitchApplied {
+                enabled: true,
+                error: Some("helper missing".into()),
+            },
+        );
+        assert!(!model.config.settings.kill_switch);
+        assert!(model.status.text().contains("helper missing"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::SaveConfig)));
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub fn run(mut model: Model) -> Result<()> {
     spawn_ticker(tx.clone());
     spawn_suspend_watcher(tx.clone());
 
+    reconcile_kill_switch_state(&mut model);
+
     let process_slot = Arc::new(Mutex::new(None));
 
     let result = run_loop(&mut model, rx, &tx, process_slot.clone(), &ipc_server);
@@ -58,6 +60,7 @@ fn run_loop(
                     | Effect::PasteClipboard
                     | Effect::UpdateSubscription { .. }
                     | Effect::BroadcastState
+                    | Effect::ApplyKillSwitch { .. }
             ) {
                 should_broadcast = true;
             }
@@ -98,8 +101,18 @@ fn execute_daemon_effect(
             model.connection = ConnectionState::ConnectPending;
             let tx = tx.clone();
             let slot = process_slot.clone();
-            thread::spawn(
-                move || match crate::singbox::runner::start(&profile, &settings) {
+            let kill_switch = model.config.settings.kill_switch;
+            thread::spawn(move || {
+                if kill_switch {
+                    if let Err(e) = open_handshake_window(&profile) {
+                        let _ = tx.send(Msg::ConnectFailed(format!(
+                            "kill switch handshake setup failed: {}",
+                            e
+                        )));
+                        return;
+                    }
+                }
+                match crate::singbox::runner::start(&profile, &settings) {
                     Ok(handle) => {
                         let pid = handle.pid;
                         *slot.lock().unwrap() = Some(handle);
@@ -108,8 +121,8 @@ fn execute_daemon_effect(
                     Err(e) => {
                         let _ = tx.send(Msg::ConnectFailed(e.to_string()));
                     }
-                },
-            );
+                }
+            });
         }
         Effect::Disconnect => {
             if let Some(mut handle) = process_slot.lock().unwrap().take() {
@@ -127,6 +140,11 @@ fn execute_daemon_effect(
             model.set_status(AppStatus::Info("Disconnected".into()));
             model.overlay = Overlay::None;
             crate::services::waybar::write_state(model);
+            if model.config.settings.kill_switch {
+                if let Err(e) = crate::services::killswitch::revoke() {
+                    tracing::warn!("Failed to flush kill switch handshake set: {}", e);
+                }
+            }
         }
         Effect::DownloadGeo => {
             model.geo_updating = true;
@@ -235,7 +253,65 @@ fn execute_daemon_effect(
                 let _ = tx.send(Msg::ConfigReloaded(result));
             });
         }
+        Effect::ApplyKillSwitch { enabled } => {
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let error = crate::services::killswitch::apply(enabled)
+                    .err()
+                    .map(|e| e.to_string());
+                let _ = tx.send(Msg::KillSwitchApplied { enabled, error });
+            });
+        }
     }
+    Ok(())
+}
+
+/// At daemon startup, align `settings.kill_switch` with the actual systemd
+/// unit state. systemd is the source of truth — if a user disabled the unit
+/// manually or never installed the helper, the persisted bool would otherwise
+/// drift and the TUI would render `[KS]` against an open firewall.
+fn reconcile_kill_switch_state(model: &mut Model) {
+    let active = match crate::services::killswitch::is_active() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Failed to query kill switch unit state: {}", e);
+            return;
+        }
+    };
+    if model.config.settings.kill_switch != active {
+        tracing::info!(
+            "Reconciling kill switch state: config={}, systemd={}",
+            model.config.settings.kill_switch,
+            active
+        );
+        model.config.settings.kill_switch = active;
+        if let Err(e) = model.save() {
+            tracing::warn!("Failed to persist reconciled kill switch state: {}", e);
+        }
+    }
+}
+
+/// Pre-resolve the VPN endpoint and open a temporary nft exception so the
+/// initial handshake can pass through the kill switch. Also allowlists the
+/// hard-coded DoH bootstrap (`1.1.1.1:443`) that sing-box uses to resolve the
+/// VPN server hostname (see `src/singbox/config.rs`).
+///
+/// Set elements are deduplicated by nftables and remain until disconnect, so
+/// repeated calls are idempotent and safe across reconnects.
+fn open_handshake_window(profile: &crate::config::profile::Profile) -> Result<()> {
+    let endpoints = crate::services::killswitch::resolve_endpoints(&profile.address, profile.port)?;
+    // sing-box VLESS over TLS/REALITY is TCP; we don't have UDP transports today.
+    for addr in &endpoints {
+        crate::services::killswitch::allow_endpoint(addr, "tcp")?;
+    }
+    let doh: std::net::SocketAddr = format!(
+        "{}:{}",
+        crate::services::killswitch::BOOTSTRAP_DOH_HOST,
+        crate::services::killswitch::BOOTSTRAP_DOH_PORT
+    )
+    .parse()
+    .expect("bootstrap DoH address is a constant");
+    crate::services::killswitch::allow_endpoint(&doh, "tcp")?;
     Ok(())
 }
 

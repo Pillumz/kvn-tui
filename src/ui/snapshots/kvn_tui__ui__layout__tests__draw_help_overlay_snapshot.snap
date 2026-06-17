@@ -1,12 +1,10 @@
 ---
 source: src/ui/layout.rs
-assertion_line: 514
 expression: "snapshot_terminal(&model, 80, 40)"
 ---
 ┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
 │No sources. Press p to paste a profile││                                      │
 │or subscription URL from clipboard.   ││                                      │
-│                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
@@ -27,6 +25,7 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │i            Cycle subscription auto-update   │               │
 │               │e            Open profiles.json in $EDITOR    │               │
 │               │a            Toggle auto-connect              │               │
+│               │K            Toggle kill switch               │               │
 │               │r            Reconnect                        │               │
 │               │s            Stop / disconnect                │               │
 │               │q / Esc      Detach TUI                       │               │

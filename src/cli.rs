@@ -21,6 +21,12 @@ pub struct Cli {
     )]
     install_polkit: bool,
 
+    #[arg(
+        long,
+        help = "Install kill switch: nftables ruleset, systemd unit, helper, and sudoers fragment"
+    )]
+    install_killswitch: bool,
+
     #[arg(long, help = "Run the headless daemon that manages sing-box")]
     pub daemon: bool,
 }
@@ -54,6 +60,22 @@ fn install_polkit() -> Result<()> {
     Ok(())
 }
 
+/// Run the embedded kill switch installer script.
+fn install_killswitch() -> Result<()> {
+    let script = include_str!("../contrib/install-killswitch.sh");
+    let tmp = std::env::temp_dir().join("kvn-tui-install-killswitch.sh");
+    std::fs::write(&tmp, script)?;
+    let status = std::process::Command::new("bash")
+        .arg(&tmp)
+        .status()
+        .context("failed to run install-killswitch.sh")?;
+    std::fs::remove_file(&tmp).ok();
+    if !status.success() {
+        anyhow::bail!("install-killswitch.sh exited with status {}", status);
+    }
+    Ok(())
+}
+
 /// Parse CLI arguments and execute any non-TUI commands.
 ///
 /// Returns `Some(Ok(()))` or `Some(Err(_))` if a CLI action was handled
@@ -71,6 +93,9 @@ pub fn try_run_from_parsed(cli: &Cli) -> Option<Result<()>> {
     }
     if cli.install_polkit {
         return Some(install_polkit());
+    }
+    if cli.install_killswitch {
+        return Some(install_killswitch());
     }
     if cli.waybar_status {
         waybar::print_status();
@@ -107,6 +132,12 @@ mod tests {
     fn install_polkit_flag_detected() {
         let cli = Cli::parse_from(["kvn-tui", "--install-polkit"]);
         assert!(cli.install_polkit);
+    }
+
+    #[test]
+    fn install_killswitch_flag_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "--install-killswitch"]);
+        assert!(cli.install_killswitch);
     }
 
     #[test]

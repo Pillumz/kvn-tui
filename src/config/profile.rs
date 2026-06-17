@@ -334,6 +334,8 @@ pub struct Settings {
     pub geo_routing: GeoRouting,
     #[serde(default)]
     pub auto_connect: bool,
+    #[serde(default)]
+    pub kill_switch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_profile: Option<Uuid>,
 }
@@ -354,6 +356,7 @@ impl Default for Settings {
             dns_strategy: default_dns_strategy(),
             geo_routing: GeoRouting::default(),
             auto_connect: false,
+            kill_switch: false,
             last_connected_profile: None,
         }
     }
@@ -575,6 +578,7 @@ mod tests {
         assert_eq!(s.dns_strategy, DnsStrategy::PreferIpv4);
         assert!(s.default_profile.is_none());
         assert!(!s.auto_connect);
+        assert!(!s.kill_switch);
         assert!(s.last_connected_profile.is_none());
         assert!(s.geo_routing.current_region.is_none());
         assert!(s.geo_routing.selected_region_modes.is_empty());
@@ -625,6 +629,32 @@ mod tests {
         let c = Config::default();
         assert!(c.profiles.is_empty());
         assert_eq!(c.settings.tun_interface, "tun0");
+    }
+
+    #[test]
+    fn settings_serde_roundtrip_with_kill_switch() {
+        let s = Settings {
+            kill_switch: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"kill_switch\":true"));
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, restored);
+        assert!(restored.kill_switch);
+    }
+
+    #[test]
+    fn settings_serde_kill_switch_defaults_when_absent() {
+        // Older configs without the field should deserialize with kill_switch=false.
+        let json = r#"{
+            "tun_interface": "tun0",
+            "dns_strategy": "prefer_ipv4",
+            "geo_routing": {},
+            "auto_connect": false
+        }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.kill_switch);
     }
 
     #[test]

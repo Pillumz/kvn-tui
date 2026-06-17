@@ -1,3 +1,4 @@
+pub mod killswitch;
 pub mod log_tailer;
 pub mod suspend;
 pub mod waybar;

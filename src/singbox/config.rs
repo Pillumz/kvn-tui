@@ -306,6 +306,10 @@ fn build_route(
         _ => "proxy",
     };
 
+    // `default_mark` tags every packet sing-box sends to the network with a
+    // Linux fwmark. The kvn-tui kill switch's nft ruleset allowlists this mark,
+    // so traffic from sing-box's `direct` outbound (used by Bypass/Only routing
+    // modes) can reach the physical interface while everything else is dropped.
     let route = json!({
         "default_domain_resolver": {
             "server": "remote",
@@ -313,6 +317,7 @@ fn build_route(
         },
         "rules": rules,
         "auto_detect_interface": true,
+        "default_mark": 666,
         "final": final_outbound
     });
 
@@ -519,6 +524,20 @@ mod tests {
         profile.transport_type = None;
         let outbound = build_vless_outbound(&profile).unwrap();
         assert!(outbound.get("transport").is_none());
+    }
+
+    #[test]
+    fn route_has_default_mark_for_killswitch() {
+        let (route, _) = build_route(
+            &RoutingMode::Global,
+            DnsStrategy::PreferIpv4,
+            &GeoAvailability::all(),
+        );
+        assert_eq!(
+            route["default_mark"].as_u64(),
+            Some(666),
+            "default_mark must match the kill-switch nft rule (0x29a)"
+        );
     }
 
     #[test]

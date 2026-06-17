@@ -94,6 +94,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["i", "Cycle subscription auto-update"]),
         Row::new(vec!["e", "Open profiles.json in $EDITOR"]),
         Row::new(vec!["a", "Toggle auto-connect"]),
+        Row::new(vec!["K", "Toggle kill switch"]),
         Row::new(vec!["r", "Reconnect"]),
         Row::new(vec!["s", "Stop / disconnect"]),
         Row::new(vec!["q / Esc", "Detach TUI"]),

@@ -57,6 +57,11 @@ impl<'a> Widget for StatusBar<'a> {
             spans.push(Span::styled("[AUTO]", Theme::accent()));
         }
 
+        if self.model.config.settings.kill_switch {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("[KS]", Theme::accent()));
+        }
+
         spans.push(Span::raw(" "));
         spans.push(Span::styled(routing, Theme::accent()));
 
