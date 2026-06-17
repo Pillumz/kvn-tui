@@ -117,6 +117,9 @@ fn run_loop(
                         enable_raw_mode()?;
                         terminal.backend_mut().execute(EnterAlternateScreen)?;
                         terminal.clear()?;
+                        while event::poll(Duration::ZERO).unwrap_or(false) {
+                            let _ = event::read();
+                        }
                         event_reading_enabled.store(true, Ordering::Relaxed);
                         if result.is_ok() {
                             if let Ok(config) = crate::config::load_config() {
