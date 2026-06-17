@@ -319,21 +319,12 @@ fn handle_enter_on_sources(model: &mut Model) -> Vec<Effect> {
     } else if let Some(sub) = model.selected_subscription() {
         let id = sub.id;
         let name = sub.name.clone();
-        // If the subscription already has profiles, connect to the first one.
-        if let Some(profile) = model
+        if !model
             .config
             .profiles
             .iter()
-            .find(|p| p.subscription_id == Some(id))
-            .cloned()
+            .any(|p| p.subscription_id == Some(id))
         {
-            push_status(
-                &mut effects,
-                model,
-                crate::app::model::AppStatus::Info(format!("Connecting to {}…", profile.name)),
-            );
-            model.connection = ConnectionState::Connecting;
-        } else {
             model.subscription_fetching = true;
             model.subscription_updates.insert(id);
             let mut result = vec![Effect::SaveConfig, Effect::UpdateSubscription { id }];
@@ -956,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_mode_enter_on_subscription_header_connects_first_profile() {
+    fn normal_mode_enter_on_subscription_header_does_nothing() {
         use crate::config::profile::Subscription;
         use uuid::Uuid;
 
@@ -979,8 +970,8 @@ mod tests {
         });
         model.selected = 0; // subscription header
         let effects = handle_sources(&mut model, KeyEvent::from(KeyCode::Enter));
-        assert_eq!(model.connection, ConnectionState::Connecting);
-        assert_eq!(effects, vec![app_log_info("Connecting to SubProfile…")]);
+        assert_eq!(model.connection, ConnectionState::Idle);
+        assert!(effects.is_empty());
     }
 
     #[test]
