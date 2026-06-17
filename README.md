@@ -18,11 +18,12 @@
 
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
 - **Profile management** — edit via `$EDITOR`, delete, and organize server profiles
-- **One-click paste** — import `vless://` share links directly from the Wayland clipboard
+- **One-click paste** — import `vless://` share links or subscription URLs directly from the Wayland clipboard
+- **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, one `vless://` per line); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
 - **Geo region selection** — choose Russia, China, Iran, or Global on first launch; only relevant routing modes and geo databases are shown/downloaded
 - **Routing modes** — Global, Bypass RU, Only RU, Bypass CN, Only CN, Bypass IR, Only IR (powered by geoip/geosite rule-sets)
 - **Geo database updates** — download and update rule-sets from within the app
-- **External editor support** — open `profiles.json` in `$EDITOR` without leaving the TUI
+- **Kill switch** — block all outbound traffic if the VPN connection drops; toggled with `K`; powered by nftables + a systemd unit
 - **Auto-connect** — automatically reconnect to the last used profile on startup
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — tail sing-box output in a split-pane view
@@ -125,6 +126,30 @@ This command will:
 
 If you prefer not to use polkit, you can simply authenticate when the dialog appears — the application works either way.
 
+### Kill Switch Setup (optional)
+
+The kill switch blocks all outbound traffic when the VPN connection is not active. To use it, install the bundled helper:
+
+```bash
+sudo kvn-tui --install-killswitch
+```
+
+This command will:
+
+1. Add your user to the `network` group (if not already a member).
+2. Install `/etc/kvn-tui/killswitch.nft` — the nftables ruleset.
+3. Install `/usr/lib/kvn-tui/killswitch-helper.sh` — a root-owned helper script.
+4. Install `/etc/systemd/system/kvn-tui-killswitch.service` — loads the ruleset at boot.
+5. Create `/etc/sudoers.d/kvn-tui-killswitch` — allows the `network` group to run the helper without a password prompt.
+
+> **Requires** the `nftables` package. Install it with `sudo pacman -S nftables` if not already present.
+
+> If you were just added to the `network` group, run `newgrp network` in your current shell, or log out and back in before toggling the kill switch.
+
+Once installed, press `K` in the TUI to enable or disable the kill switch. The status bar shows `[KS]` when it is active.
+
+> The kill switch is independent from the polkit rule above, but both use the `network` group. Running `--install-polkit` first means `--install-killswitch` will skip the group-add step.
+
 ### Build & Install from Source
 
 #### Prerequisites
@@ -205,6 +230,7 @@ kvn-tui
 | `o` | Select geo region |
 | `u` | Update geoip/geosite databases |
 | `e` | Open `profiles.json` in `$EDITOR` |
+| `K` | Toggle kill switch |
 | `a` | Toggle auto-connect |
 | `r` | Reconnect |
 | `s` | Stop / disconnect |
@@ -250,7 +276,7 @@ Logs (both sing-box output and app status messages) are written to:
 
 ## Roadmap to v1.0.0
 
-- **Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly
+- ~~**Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly~~ ✅ Done
 - **All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports
 - **DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)
 - **Traffic statistics** — live bandwidth and connection stats in the TUI

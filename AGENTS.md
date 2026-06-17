@@ -36,6 +36,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `paths` | `src/infra/paths.rs` | XDG directory resolution (`~/.config/kvn-tui/`), atomic path construction |
 | `waybar` | `src/services/waybar.rs` | Read/write `state.json` for waybar integration and crash recovery |
 | `suspend` | `src/services/suspend.rs` | D-Bus listener for `systemd-logind` `PrepareForSleep` signals (zbus) |
+| `killswitch` | `src/services/killswitch.rs` | nftables helper integration: enable/disable systemd unit, pre-allow VPN handshake IPs, reconcile state on startup |
 | `services` | `src/services.rs`, `src/services/log_tailer.rs`, `src/services/waybar.rs`, `src/services/suspend.rs` | Background services: log tailer, waybar state I/O, suspend watcher (all run inside the daemon) |
 | `infra` | `src/infra.rs`, `src/infra/clipboard.rs`, `src/infra/editor.rs`, `src/infra/geo.rs`, `src/infra/paths.rs`, `src/infra/process_handle.rs`, `src/infra/subscription.rs` | Infrastructure utilities: clipboard (TUI client), editor (TUI client), geo, paths, process handle, subscription fetcher |
 
@@ -173,6 +174,15 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 
 ### Suspend / Resume
 - `services/suspend.rs` runs a blocking zbus listener in a dedicated thread. On resume (`PrepareForSleep` with `false`), it sends `Msg::SystemResumed` through the `mpsc` channel so `update.rs` can schedule a reconnect effect.
+
+### Kill Switch
+- Uses **nftables** + a systemd unit (`kvn-tui-killswitch.service`) that loads `/etc/kvn-tui/killswitch.nft`. The ruleset drops all outbound traffic except localhost, `tun*` interfaces, and packets marked `0x29a` by sing-box.
+- Privilege escalation via **sudoers NOPASSWD** (not polkit) — grants the `network` group passwordless access to `/usr/lib/kvn-tui/killswitch-helper.sh`. Installed with `sudo kvn-tui --install-killswitch`.
+- **Toggle flow**: `K` keybinding → `Effect::ApplyKillSwitch { enabled }` → daemon spawns thread calling `services::killswitch::apply(enabled)` → sends `Msg::KillSwitchApplied { enabled, error }` back. On success the boolean is flipped and config is saved; on error the boolean is unchanged and the error is shown.
+- **Reconciliation on startup**: daemon queries systemd to check whether the unit is actually active and aligns `settings.kill_switch` with the real state, preventing drift if the unit was manually disabled or the helper was uninstalled.
+- **Handshake window**: before spawning `sing-box run`, the daemon pre-resolves the VPN endpoint's IP addresses via DNS and adds them as temporary nftables exceptions (`allow <ip> tcp <port>`), ensuring the initial TLS/REALITY handshake is not blocked. 1.1.1.1:443 is also allowlisted for sing-box's DoH bootstrap. These exceptions are revoked on disconnect.
+- **sing-box integration**: all sing-box packets carry `default_mark=666` (fwmark `0x29a`); the nftables rule `meta mark 0x29a accept` lets them through. This ensures Bypass/Only geo-routing modes work correctly even with the kill switch active.
+- **UI**: the status bar shows a `[KS]` badge when the kill switch is enabled.
 
 ### State I/O
 - `services/waybar.rs` writes a small JSON file (`state.json`) on every connect/disconnect. It stores connection status, active profile name, and sing-box PID.
