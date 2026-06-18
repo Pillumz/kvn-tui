@@ -62,6 +62,20 @@ impl<'a> Widget for StatusBar<'a> {
             spans.push(Span::styled("[KS]", Theme::accent()));
         }
 
+        let dns = &self.model.config.settings.dns;
+        let dns_label = if dns.fakeip_enabled {
+            "fakeip".to_string()
+        } else {
+            dns.final_server_entry()
+                .map(|s| s.kind_label().to_string())
+                .unwrap_or_else(|| "?".to_string())
+        };
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("[DNS: {}]", dns_label),
+            Theme::accent(),
+        ));
+
         spans.push(Span::raw(" "));
         spans.push(Span::styled(routing, Theme::accent()));
 

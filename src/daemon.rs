@@ -102,9 +102,10 @@ fn execute_daemon_effect(
             let tx = tx.clone();
             let slot = process_slot.clone();
             let kill_switch = model.config.settings.kill_switch;
+            let dns = settings.dns.clone();
             thread::spawn(move || {
                 if kill_switch {
-                    if let Err(e) = open_handshake_window(&profile) {
+                    if let Err(e) = open_handshake_window(&profile, &dns) {
                         let _ = tx.send(Msg::ConnectFailed(format!(
                             "kill switch handshake setup failed: {}",
                             e
@@ -292,27 +293,74 @@ fn reconcile_kill_switch_state(model: &mut Model) {
 }
 
 /// Pre-resolve the VPN endpoint and open a temporary nft exception so the
-/// initial handshake can pass through the kill switch. Also allowlists the
-/// hard-coded DoH bootstrap (`1.1.1.1:443`) that sing-box uses to resolve the
-/// VPN server hostname (see `src/singbox/config.rs`).
+/// initial handshake can pass through the kill switch. Also allowlists every
+/// non-`local`, non-`fakeip` DNS upstream the user has configured so sing-box
+/// can resolve the VPN server hostname (see `src/singbox/config.rs`).
 ///
 /// Set elements are deduplicated by nftables and remain until disconnect, so
 /// repeated calls are idempotent and safe across reconnects.
-fn open_handshake_window(profile: &crate::config::profile::Profile) -> Result<()> {
+fn open_handshake_window(
+    profile: &crate::config::profile::Profile,
+    dns: &crate::config::profile::DnsConfig,
+) -> Result<()> {
     let endpoints = crate::services::killswitch::resolve_endpoints(&profile.address, profile.port)?;
     // sing-box VLESS over TLS/REALITY is TCP; we don't have UDP transports today.
     for addr in &endpoints {
         crate::services::killswitch::allow_endpoint(addr, "tcp")?;
     }
-    let doh: std::net::SocketAddr = format!(
-        "{}:{}",
-        crate::services::killswitch::BOOTSTRAP_DOH_HOST,
-        crate::services::killswitch::BOOTSTRAP_DOH_PORT
-    )
-    .parse()
-    .expect("bootstrap DoH address is a constant");
-    crate::services::killswitch::allow_endpoint(&doh, "tcp")?;
+    for (host, port, proto) in dns_bootstrap_endpoints(dns) {
+        match crate::services::killswitch::resolve_endpoints(&host, port) {
+            Ok(addrs) => {
+                for addr in &addrs {
+                    crate::services::killswitch::allow_endpoint(addr, proto)?;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("DNS upstream {host}:{port} resolution failed: {e}");
+            }
+        }
+    }
     Ok(())
+}
+
+/// Return `(host, port, proto)` triples for every DNS server that needs an
+/// outbound network allowlist before the tun interface is up. `local` and
+/// `fakeip` servers are skipped — they never leave the host.
+fn dns_bootstrap_endpoints(
+    dns: &crate::config::profile::DnsConfig,
+) -> Vec<(String, u16, &'static str)> {
+    use crate::config::profile::DnsServer;
+    dns.servers
+        .iter()
+        .filter_map(|s| match s {
+            DnsServer::Local { .. } | DnsServer::FakeIp { .. } => None,
+            DnsServer::Udp {
+                server,
+                server_port,
+                ..
+            } => Some((server.clone(), server_port.unwrap_or(53), "udp")),
+            DnsServer::Tcp {
+                server,
+                server_port,
+                ..
+            } => Some((server.clone(), server_port.unwrap_or(53), "tcp")),
+            DnsServer::Tls {
+                server,
+                server_port,
+                ..
+            } => Some((server.clone(), server_port.unwrap_or(853), "tcp")),
+            DnsServer::Https {
+                server,
+                server_port,
+                ..
+            } => Some((server.clone(), server_port.unwrap_or(443), "tcp")),
+            DnsServer::Quic {
+                server,
+                server_port,
+                ..
+            } => Some((server.clone(), server_port.unwrap_or(853), "udp")),
+        })
+        .collect()
 }
 
 fn build_snapshot(model: &Model) -> StateSnapshot {
@@ -325,6 +373,8 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         selected: model.selected,
         routing_selected: model.routing_selected,
         geo_region_selected: model.geo_region_selected,
+        dns_selected: model.dns_selected,
+        dns_strategy_draft: model.dns_strategy_draft.clone(),
         geo_updating: model.geo_updating,
         geo_last_updated: model.geo_last_updated.clone(),
         overlay: model.overlay,

@@ -24,6 +24,7 @@
 - **Routing modes** — Global, Bypass RU, Only RU, Bypass CN, Only CN, Bypass IR, Only IR (powered by geoip/geosite rule-sets)
 - **Geo database updates** — download and update rule-sets from within the app
 - **Kill switch** — block all outbound traffic if the VPN connection drops; toggled with `K`; powered by nftables + a systemd unit
+- **DNS configuration** — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle, fake-IP toggle (sing-box 1.12 API), plus custom servers and per-domain routing rules via `profiles.json`; opened with `D`
 - **Auto-connect** — automatically reconnect to the last used profile on startup
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — tail sing-box output in a split-pane view
@@ -231,6 +232,7 @@ kvn-tui
 | `u` | Update geoip/geosite databases |
 | `e` | Open `profiles.json` in `$EDITOR` |
 | `K` | Toggle kill switch |
+| `D` | DNS settings (presets, strategy, fake-IP) |
 | `a` | Toggle auto-connect |
 | `r` | Reconnect |
 | `s` | Stop / disconnect |
@@ -248,7 +250,17 @@ Configuration is stored in:
 ~/.config/kvn-tui/profiles.json
 ```
 
-The file contains your profile list and application settings (default profile, TUN interface name, DNS strategy, routing mode, auto-connect, geo region). You can edit it manually with the `e` keybinding or any text editor.
+The file contains your profile list and application settings (default profile, TUN interface name, DNS configuration, routing mode, auto-connect, geo region). You can edit it manually with the `e` keybinding or any text editor.
+
+`settings.dns` controls how sing-box resolves names. It maps directly onto sing-box 1.12 DNS schema:
+
+- `dns.servers` — list of upstream servers (`local`, `udp`, `tcp`, `tls` / DoT, `https` / DoH, `quic` / DoQ, `fakeip`)
+- `dns.rules` — per-domain routing (`domain`, `domain_suffix`, `domain_keyword`, `domain_regex`, `rule_set`) targeting a specific server tag
+- `dns.final_server` — fallback server tag when no rule matches
+- `dns.strategy` — `prefer_ipv4` / `prefer_ipv6` / `ipv4_only` / `ipv6_only`
+- `dns.fakeip_enabled` — when true, an `A`/`AAAA` rule is auto-routed to the `fakeip` server, `dns.independent_cache` is enabled, and `experimental.cache_file.store_fakeip` persists the IP→domain map across restarts
+
+The `D` overlay in the TUI exposes built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), a strategy cycle (`h` / `l` preview, Enter to apply), and the fake-IP toggle. Custom servers and per-domain rules are edited by hand in `profiles.json` via the `e` keybinding.
 
 When `auto_connect` is enabled, the application stores `last_connected_profile` and automatically connects to that profile on the next startup.
 
@@ -277,8 +289,8 @@ Logs (both sing-box output and app status messages) are written to:
 ## Roadmap to v1.0.0
 
 - ~~**Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly~~ ✅ Done
+- ~~**DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)~~ ✅ Done
 - **All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports
-- **DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)
 - **Traffic statistics** — live bandwidth and connection stats in the TUI
 - **Import/Export profiles** — bulk import from subscription links and export profiles to shareable links
 

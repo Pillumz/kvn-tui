@@ -16,12 +16,6 @@ use std::process::Command;
 const HELPER: &str = "/usr/lib/kvn-tui/killswitch-helper.sh";
 const UNIT: &str = "kvn-tui-killswitch.service";
 
-/// DNS-over-HTTPS bootstrap endpoint used by sing-box to resolve the VPN
-/// server hostname. Must be allowlisted during the handshake window when the
-/// kill switch is active. See `src/singbox/config.rs` `dns.servers.remote`.
-pub const BOOTSTRAP_DOH_HOST: &str = "1.1.1.1";
-pub const BOOTSTRAP_DOH_PORT: u16 = 443;
-
 fn helper_present() -> bool {
     std::path::Path::new(HELPER).is_file()
 }

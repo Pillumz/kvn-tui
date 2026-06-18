@@ -1,6 +1,5 @@
 ---
 source: src/ui/layout.rs
-assertion_line: 551
 expression: "snapshot_terminal(&model, 80, 20)"
 ---
 ┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
@@ -22,4 +21,4 @@ expression: "snapshot_terminal(&model, 80, 20)"
 │                                      ││                                      │
 │                                      ││                                      │
 └──────────────────────────────────────┘└──────────────────────────────────────┘
-[DISCONNECTED] [Global] [Geo: 2026-05-31 13:41]
+[DISCONNECTED] [DNS: DoH] [Global] [Geo: 2026-05-31 13:41]

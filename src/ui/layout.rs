@@ -28,6 +28,7 @@ pub fn draw(frame: &mut Frame, model: &Model) {
         Overlay::Error => draw_error(frame, area, model.status.text()),
         Overlay::RoutingMode => draw_routing_mode(frame, model, area),
         Overlay::GeoRegions => draw_geo_region(frame, model, area),
+        Overlay::DnsSettings => draw_dns_settings(frame, model, area),
         Overlay::None => {}
     }
 }
@@ -95,6 +96,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["e", "Open profiles.json in $EDITOR"]),
         Row::new(vec!["a", "Toggle auto-connect"]),
         Row::new(vec!["K", "Toggle kill switch"]),
+        Row::new(vec!["D", "DNS settings"]),
         Row::new(vec!["r", "Reconnect"]),
         Row::new(vec!["s", "Stop / disconnect"]),
         Row::new(vec!["q / Esc", "Detach TUI"]),
@@ -184,6 +186,9 @@ fn draw_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
 fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
     let modes = model.config.settings.geo_routing.available_modes();
     let labels: Vec<&str> = modes.iter().map(|m| m.as_str()).collect();
+    let active = modes
+        .iter()
+        .position(|m| *m == model.config.settings.geo_routing.mode());
     draw_selection_modal(
         frame,
         area,
@@ -191,17 +196,30 @@ fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
         " Routing Mode ",
         &labels,
         model.routing_selected,
+        active,
     );
 }
 
 /// Draw the geo region selection modal.
 fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
+    use crate::config::profile::GeoRegion;
     let labels = [
         "🇷🇺 Russia",
         "🇨🇳 China",
         "🇮🇷 Iran",
         "🌍 Global (no geo rules)",
     ];
+    let active = model
+        .config
+        .settings
+        .geo_routing
+        .current_region
+        .map(|r| match r {
+            GeoRegion::Ru => 0,
+            GeoRegion::Cn => 1,
+            GeoRegion::Ir => 2,
+            GeoRegion::Global => 3,
+        });
     draw_selection_modal(
         frame,
         area,
@@ -209,7 +227,77 @@ fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
         " Geo Region ",
         &labels,
         model.geo_region_selected,
+        active,
     );
+}
+
+/// Draw the DNS settings overlay: built-in presets, strategy cycle, fake-IP
+/// toggle. Custom servers and per-domain rules are edited via the main
+/// profiles.json (`e` key in the sources list).
+fn draw_dns_settings(frame: &mut Frame, model: &Model, area: Rect) {
+    let dns = &model.config.settings.dns;
+    let strategy_label = if let Some(ref draft) = model.dns_strategy_draft {
+        if *draft == dns.strategy {
+            format!("Strategy: ‹ {} ›", draft.as_str())
+        } else {
+            format!("Strategy: ‹ {} › *", draft.as_str())
+        }
+    } else {
+        format!("Strategy: ‹ {} ›", dns.strategy.as_str())
+    };
+    let fakeip_label = format!("Fake-IP: {}", if dns.fakeip_enabled { "on" } else { "off" });
+    let labels: Vec<String> = vec![
+        "Preset: Cloudflare DoH (1.1.1.1)".to_string(),
+        "Preset: Google DoT (8.8.8.8)".to_string(),
+        "Preset: Quad9 DoH (9.9.9.9)".to_string(),
+        "Preset: System resolver (local)".to_string(),
+        strategy_label,
+        fakeip_label,
+    ];
+    let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+    draw_selection_modal(
+        frame,
+        area,
+        "DNS settings",
+        " DNS ",
+        &label_refs,
+        model.dns_selected,
+        current_dns_preset_index(dns),
+    );
+}
+
+/// Return the index of the built-in preset (0..=3) that matches the user's
+/// current `dns.servers + final_server`, or `None` for a custom config.
+fn current_dns_preset_index(dns: &crate::config::profile::DnsConfig) -> Option<usize> {
+    use crate::config::profile::DnsServer;
+    let non_fakeip: Vec<&DnsServer> = dns
+        .servers
+        .iter()
+        .filter(|s| !matches!(s, DnsServer::FakeIp { .. }))
+        .collect();
+    let final_entry = non_fakeip.iter().find(|s| s.tag() == dns.final_server)?;
+
+    // System: only one server, the local resolver.
+    if non_fakeip.len() == 1 {
+        return matches!(final_entry, DnsServer::Local { .. }).then_some(3);
+    }
+    if non_fakeip.len() != 2
+        || !non_fakeip
+            .iter()
+            .any(|s| matches!(s, DnsServer::Local { .. }))
+    {
+        return None;
+    }
+    match final_entry {
+        DnsServer::Https { server, path, .. } if server == "1.1.1.1" && path == "/dns-query" => {
+            Some(0)
+        }
+        DnsServer::Tls { server, .. } if server == "8.8.8.8" => Some(1),
+        DnsServer::Https { server, path, .. } if server == "9.9.9.9" && path == "/dns-query" => {
+            Some(2)
+        }
+        _ => None,
+    }
 }
 
 fn draw_selection_modal(
@@ -219,6 +307,7 @@ fn draw_selection_modal(
     modal_title: &str,
     items: &[&str],
     selected: usize,
+    active: Option<usize>,
 ) {
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(heading, Theme::accent())),
@@ -226,7 +315,10 @@ fn draw_selection_modal(
     ];
     for (i, label) in items.iter().enumerate() {
         let marker = if i == selected { "> " } else { "  " };
-        let style = if i == selected {
+        let is_active = active == Some(i);
+        let style = if is_active {
+            Theme::success().add_modifier(Modifier::BOLD)
+        } else if i == selected {
             Theme::accent().add_modifier(Modifier::BOLD)
         } else {
             Theme::normal()
@@ -504,6 +596,89 @@ mod tests {
     }
 
     #[test]
+    fn dns_preset_index_recognises_defaults() {
+        use crate::config::profile::DnsConfig;
+        let dns = DnsConfig::default();
+        assert_eq!(current_dns_preset_index(&dns), Some(0));
+    }
+
+    #[test]
+    fn dns_preset_index_recognises_quad9_doh() {
+        use crate::config::profile::{DnsConfig, DnsServer, DnsStrategy};
+        let dns = DnsConfig {
+            servers: vec![
+                DnsServer::Local {
+                    tag: "local".to_string(),
+                },
+                DnsServer::Https {
+                    tag: "remote".to_string(),
+                    server: "9.9.9.9".to_string(),
+                    server_port: None,
+                    path: "/dns-query".to_string(),
+                },
+            ],
+            rules: Vec::new(),
+            final_server: "remote".to_string(),
+            strategy: DnsStrategy::PreferIpv4,
+            fakeip_enabled: false,
+        };
+        assert_eq!(current_dns_preset_index(&dns), Some(2));
+    }
+
+    #[test]
+    fn dns_preset_index_recognises_system_only() {
+        use crate::config::profile::{DnsConfig, DnsServer, DnsStrategy};
+        let dns = DnsConfig {
+            servers: vec![DnsServer::Local {
+                tag: "local".to_string(),
+            }],
+            rules: Vec::new(),
+            final_server: "local".to_string(),
+            strategy: DnsStrategy::PreferIpv4,
+            fakeip_enabled: false,
+        };
+        assert_eq!(current_dns_preset_index(&dns), Some(3));
+    }
+
+    #[test]
+    fn dns_preset_index_ignores_fakeip_extras() {
+        // Fake-IP servers must not affect preset detection — they sit alongside
+        // any preset.
+        use crate::config::profile::{DnsConfig, DnsServer};
+        let mut dns = DnsConfig::default();
+        dns.servers.push(DnsServer::FakeIp {
+            tag: "fakeip".to_string(),
+            inet4_range: "198.18.0.0/15".to_string(),
+            inet6_range: "fc00::/18".to_string(),
+        });
+        dns.fakeip_enabled = true;
+        assert_eq!(current_dns_preset_index(&dns), Some(0));
+    }
+
+    #[test]
+    fn dns_preset_index_none_for_custom_endpoint() {
+        use crate::config::profile::{DnsConfig, DnsServer, DnsStrategy};
+        let dns = DnsConfig {
+            servers: vec![
+                DnsServer::Local {
+                    tag: "local".to_string(),
+                },
+                DnsServer::Https {
+                    tag: "remote".to_string(),
+                    server: "94.140.14.14".to_string(),
+                    server_port: None,
+                    path: "/dns-query".to_string(),
+                },
+            ],
+            rules: Vec::new(),
+            final_server: "remote".to_string(),
+            strategy: DnsStrategy::PreferIpv4,
+            fakeip_enabled: false,
+        };
+        assert_eq!(current_dns_preset_index(&dns), None);
+    }
+
+    #[test]
     fn centered_rect_100_100_fills_area() {
         let area = Rect::new(10, 20, 80, 40);
         let popup = centered_rect(100, 100, area);
@@ -634,6 +809,36 @@ mod tests {
         model.overlay = Overlay::GeoRegions;
         model.geo_region_selected = 1;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    #[test]
+    fn draw_dns_settings_overlay_snapshot() {
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.overlay = Overlay::DnsSettings;
+        // Cursor on the "Strategy" row so it gets highlighted in the snapshot.
+        model.dns_selected = 4;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 24));
+    }
+
+    #[test]
+    fn draw_dns_settings_overlay_fakeip_on_snapshot() {
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.config.settings.dns.fakeip_enabled = true;
+        model
+            .config
+            .settings
+            .dns
+            .servers
+            .push(crate::config::profile::DnsServer::FakeIp {
+                tag: "fakeip".to_string(),
+                inet4_range: "198.18.0.0/15".to_string(),
+                inet6_range: "fc00::/18".to_string(),
+            });
+        model.overlay = Overlay::DnsSettings;
+        model.dns_selected = 5;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 24));
     }
 
     #[test]

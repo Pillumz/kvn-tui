@@ -1,5 +1,5 @@
 use crate::app::model::{ConnectionState, Overlay};
-use crate::config::profile::{Profile, Settings, Subscription};
+use crate::config::profile::{DnsStrategy, Profile, Settings, Subscription};
 use crossterm::event::KeyEvent;
 use uuid::Uuid;
 
@@ -67,6 +67,9 @@ pub struct StateSnapshot {
     pub selected: usize,
     pub routing_selected: usize,
     pub geo_region_selected: usize,
+    pub dns_selected: usize,
+    #[serde(default)]
+    pub dns_strategy_draft: Option<DnsStrategy>,
     pub geo_updating: bool,
     pub geo_last_updated: Option<String>,
     pub overlay: Overlay,

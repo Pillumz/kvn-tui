@@ -16,8 +16,9 @@ pub fn load_config_at(path: &Path) -> Result<Config> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("Failed to read {:?}", path))?;
 
-    let config: Config =
+    let mut config: Config =
         serde_json::from_str(&contents).with_context(|| format!("Failed to parse {:?}", path))?;
+    config.migrate_legacy_dns_strategy();
 
     Ok(config)
 }
@@ -27,8 +28,13 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     let dir = path.parent().context("Invalid config path")?;
     fs::create_dir_all(dir)?;
 
+    // Mirror `dns.strategy` into the legacy `dns_strategy` field so configs
+    // remain readable by older kvn-tui builds during the deprecation window.
+    let mut serializable = config.clone();
+    serializable.settings.dns_strategy = serializable.settings.dns.strategy.clone();
+
     let temp = dir.join("profiles.json.tmp");
-    let json = serde_json::to_string_pretty(config)?;
+    let json = serde_json::to_string_pretty(&serializable)?;
     fs::write(&temp, json)?;
     fs::rename(&temp, path)?;
 

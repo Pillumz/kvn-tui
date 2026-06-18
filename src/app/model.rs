@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use uuid::Uuid;
 
-use crate::config::profile::{Config, GeoRegion, Profile};
+use crate::config::profile::{Config, DnsStrategy, GeoRegion, Profile};
 use crate::config::{load_config, save_config};
 
 /// UI overlay shown on top of the main screen.
@@ -15,6 +15,7 @@ pub enum Overlay {
     Error,
     RoutingMode,
     GeoRegions,
+    DnsSettings,
 }
 
 /// A single selectable row in the unified Sources list.
@@ -124,6 +125,10 @@ pub struct Model {
     pub active_profile_id: Option<Uuid>,
     pub routing_selected: usize,
     pub geo_region_selected: usize,
+    pub dns_selected: usize,
+    /// Pending DNS strategy preview while the DNS overlay is open. Set by
+    /// `h`/`l` on the Strategy row, committed by Enter, discarded by Esc.
+    pub dns_strategy_draft: Option<DnsStrategy>,
     pub logs: VecDeque<String>,
     pub log_scroll: usize,
     pub geo_updating: bool,
@@ -210,6 +215,8 @@ impl Model {
             active_profile_id: bg_id,
             routing_selected: 0,
             geo_region_selected: 0,
+            dns_selected: 0,
+            dns_strategy_draft: None,
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,
@@ -253,6 +260,8 @@ impl Model {
             active_profile_id: None,
             routing_selected: 0,
             geo_region_selected: 0,
+            dns_selected: 0,
+            dns_strategy_draft: None,
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,
@@ -434,6 +443,8 @@ impl Model {
             active_profile_id: None,
             routing_selected: 0,
             geo_region_selected: 0,
+            dns_selected: 0,
+            dns_strategy_draft: None,
             logs: VecDeque::new(),
             log_scroll: 0,
             geo_updating: false,

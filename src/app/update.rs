@@ -235,6 +235,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         Overlay::ConfirmDelete => handle_confirm_delete(model, key),
         Overlay::RoutingMode => handle_routing_mode(model, key),
         Overlay::GeoRegions => handle_geo_region(model, key),
+        Overlay::DnsSettings => handle_dns_settings(model, key),
         Overlay::Error => {
             model.overlay = Overlay::None;
             vec![]
@@ -345,6 +346,11 @@ fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             );
             effects.push(Effect::ApplyKillSwitch { enabled: new_val });
             return effects;
+        }
+        KeyCode::Char('D') => {
+            model.overlay = Overlay::DnsSettings;
+            model.dns_selected = 0;
+            model.dns_strategy_draft = None;
         }
 
         // Help
@@ -696,6 +702,254 @@ fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         _ => {}
     }
     vec![]
+}
+
+/// Items in the DNS settings overlay, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsSettingsItem {
+    PresetCloudflareDoh,
+    PresetGoogleDot,
+    PresetQuad9Doh,
+    PresetSystemLocal,
+    CycleStrategy,
+    ToggleFakeIp,
+}
+
+impl DnsSettingsItem {
+    pub const ALL: [DnsSettingsItem; 6] = [
+        DnsSettingsItem::PresetCloudflareDoh,
+        DnsSettingsItem::PresetGoogleDot,
+        DnsSettingsItem::PresetQuad9Doh,
+        DnsSettingsItem::PresetSystemLocal,
+        DnsSettingsItem::CycleStrategy,
+        DnsSettingsItem::ToggleFakeIp,
+    ];
+
+    pub fn from_index(idx: usize) -> Option<Self> {
+        Self::ALL.get(idx).copied()
+    }
+}
+
+fn handle_dns_settings(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let len = DnsSettingsItem::ALL.len();
+    let on_strategy =
+        DnsSettingsItem::from_index(model.dns_selected) == Some(DnsSettingsItem::CycleStrategy);
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            crate::ui::nav::select_next(&mut model.dns_selected, len);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            crate::ui::nav::select_prev(&mut model.dns_selected);
+        }
+        KeyCode::Char('g') => crate::ui::nav::select_first(&mut model.dns_selected),
+        KeyCode::Char('G') => crate::ui::nav::select_last(&mut model.dns_selected, len),
+        KeyCode::Char('l') | KeyCode::Right if on_strategy => {
+            let base = model
+                .dns_strategy_draft
+                .clone()
+                .unwrap_or_else(|| model.config.settings.dns.strategy.clone());
+            model.dns_strategy_draft = Some(base.next());
+        }
+        KeyCode::Char('h') | KeyCode::Left if on_strategy => {
+            let base = model
+                .dns_strategy_draft
+                .clone()
+                .unwrap_or_else(|| model.config.settings.dns.strategy.clone());
+            model.dns_strategy_draft = Some(base.prev());
+        }
+        KeyCode::Enter => {
+            let Some(item) = DnsSettingsItem::from_index(model.dns_selected) else {
+                return vec![];
+            };
+            return apply_dns_item(model, item);
+        }
+        KeyCode::Char('q') | KeyCode::Esc => {
+            model.overlay = Overlay::None;
+            model.dns_strategy_draft = None;
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+fn apply_dns_item(model: &mut Model, item: DnsSettingsItem) -> Vec<Effect> {
+    use crate::config::profile::{DnsServer, DnsStrategy};
+
+    let mut effects = Vec::new();
+    let mut servers_changed = false;
+    let mut strategy_changed = false;
+    let mut fakeip_changed = false;
+
+    match item {
+        DnsSettingsItem::PresetCloudflareDoh => {
+            replace_preset(
+                &mut model.config.settings.dns.servers,
+                &mut model.config.settings.dns.final_server,
+                vec![
+                    DnsServer::Local {
+                        tag: "local".to_string(),
+                    },
+                    DnsServer::Https {
+                        tag: "remote".to_string(),
+                        server: "1.1.1.1".to_string(),
+                        server_port: None,
+                        path: "/dns-query".to_string(),
+                    },
+                ],
+                "remote",
+            );
+            servers_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("DNS preset: Cloudflare DoH (1.1.1.1)".into()),
+            );
+        }
+        DnsSettingsItem::PresetGoogleDot => {
+            replace_preset(
+                &mut model.config.settings.dns.servers,
+                &mut model.config.settings.dns.final_server,
+                vec![
+                    DnsServer::Local {
+                        tag: "local".to_string(),
+                    },
+                    DnsServer::Tls {
+                        tag: "remote".to_string(),
+                        server: "8.8.8.8".to_string(),
+                        server_port: Some(853),
+                    },
+                ],
+                "remote",
+            );
+            servers_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("DNS preset: Google DoT (8.8.8.8)".into()),
+            );
+        }
+        DnsSettingsItem::PresetQuad9Doh => {
+            replace_preset(
+                &mut model.config.settings.dns.servers,
+                &mut model.config.settings.dns.final_server,
+                vec![
+                    DnsServer::Local {
+                        tag: "local".to_string(),
+                    },
+                    DnsServer::Https {
+                        tag: "remote".to_string(),
+                        server: "9.9.9.9".to_string(),
+                        server_port: None,
+                        path: "/dns-query".to_string(),
+                    },
+                ],
+                "remote",
+            );
+            servers_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("DNS preset: Quad9 DoH (9.9.9.9)".into()),
+            );
+        }
+        DnsSettingsItem::PresetSystemLocal => {
+            replace_preset(
+                &mut model.config.settings.dns.servers,
+                &mut model.config.settings.dns.final_server,
+                vec![DnsServer::Local {
+                    tag: "local".to_string(),
+                }],
+                "local",
+            );
+            servers_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("DNS preset: system resolver".into()),
+            );
+        }
+        DnsSettingsItem::CycleStrategy => {
+            // Commit the h/l-driven draft if it differs from the current
+            // setting; without a draft, Enter is a no-op (h/l is the way to
+            // change strategy now).
+            let Some(draft) = model.dns_strategy_draft.take() else {
+                return effects;
+            };
+            if draft == model.config.settings.dns.strategy {
+                return effects;
+            }
+            model.config.settings.dns.strategy = draft.clone();
+            model.config.settings.dns_strategy = draft.clone();
+            strategy_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info(format!("DNS strategy: {}", draft.as_str())),
+            );
+        }
+        DnsSettingsItem::ToggleFakeIp => {
+            let enabled = !model.config.settings.dns.fakeip_enabled;
+            model.config.settings.dns.fakeip_enabled = enabled;
+            if enabled
+                && !model
+                    .config
+                    .settings
+                    .dns
+                    .servers
+                    .iter()
+                    .any(|s| matches!(s, DnsServer::FakeIp { .. }))
+            {
+                model.config.settings.dns.servers.push(DnsServer::FakeIp {
+                    tag: "fakeip".to_string(),
+                    inet4_range: "198.18.0.0/15".to_string(),
+                    inet6_range: "fc00::/18".to_string(),
+                });
+            }
+            // Force a strategy that fake-IP can serve sensibly.
+            if enabled && matches!(model.config.settings.dns.strategy, DnsStrategy::OnlyIpv6) {
+                model.config.settings.dns.strategy = DnsStrategy::PreferIpv4;
+                model.config.settings.dns_strategy = DnsStrategy::PreferIpv4;
+            }
+            fakeip_changed = true;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info(format!(
+                    "Fake-IP {}",
+                    if enabled { "enabled" } else { "disabled" }
+                )),
+            );
+        }
+    }
+
+    if servers_changed || strategy_changed || fakeip_changed {
+        effects.push(Effect::SaveConfig);
+        effects.push(Effect::BroadcastState);
+        if model.connection == ConnectionState::Connected {
+            if let Some(profile) = model.selected_profile().cloned() {
+                let settings = model.config.settings.clone();
+                model.connection = ConnectionState::Connecting;
+                push_status(
+                    &mut effects,
+                    model,
+                    AppStatus::Info("DNS changed — reconnecting…".into()),
+                );
+                effects.push(Effect::Connect { profile, settings });
+            }
+        }
+    }
+
+    effects
+}
+
+fn replace_preset(
+    servers: &mut Vec<crate::config::profile::DnsServer>,
+    final_server: &mut String,
+    preset: Vec<crate::config::profile::DnsServer>,
+    new_final: &str,
+) {
+    *servers = preset;
+    *final_server = new_final.to_string();
 }
 
 fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {

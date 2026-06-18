@@ -26,6 +26,7 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │e            Open profiles.json in $EDITOR    │               │
 │               │a            Toggle auto-connect              │               │
 │               │K            Toggle kill switch               │               │
+│               │D            DNS settings                     │               │
 │               │r            Reconnect                        │               │
 │               │s            Stop / disconnect                │               │
 │               │q / Esc      Detach TUI                       │               │
@@ -39,6 +40,5 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
-│                                      ││                                      │
 └──────────────────────────────────────┘└──────────────────────────────────────┘
-[DISCONNECTED] [Global] [Geo: 2026-05-31 13:41]
+[DISCONNECTED] [DNS: DoH] [Global] [Geo: 2026-05-31 13:41]
