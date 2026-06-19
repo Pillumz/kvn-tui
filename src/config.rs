@@ -33,10 +33,8 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     let mut serializable = config.clone();
     serializable.settings.dns_strategy = serializable.settings.dns.strategy.clone();
 
-    let temp = dir.join("profiles.json.tmp");
     let json = serde_json::to_string_pretty(&serializable)?;
-    fs::write(&temp, json)?;
-    fs::rename(&temp, path)?;
+    crate::infra::atomic::write(path, json.as_bytes())?;
 
     Ok(())
 }

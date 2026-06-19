@@ -31,7 +31,7 @@ pub fn run() -> Result<()> {
     let event_reading_enabled = Arc::new(AtomicBool::new(true));
     spawn_event_reader(tx.clone(), event_reading_enabled.clone());
     spawn_ticker(tx.clone());
-    client.spawn_reader(tx);
+    client.spawn_reader(tx)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();

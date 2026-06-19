@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -354,16 +353,7 @@ impl GeoManager {
     }
 
     fn write_atomic(&self, dest: &Path, data: &[u8]) -> Result<()> {
-        let name = dest.file_name().unwrap_or_default();
-        let temp = dest.with_file_name(format!("{}.tmp", name.to_string_lossy()));
-        let mut file = fs::File::create(&temp)
-            .with_context(|| format!("Failed to create temp file {:?}", temp))?;
-        file.write_all(data)
-            .with_context(|| format!("Failed to write temp file {:?}", temp))?;
-        drop(file);
-        fs::rename(&temp, dest)
-            .with_context(|| format!("Failed to rename {:?} -> {:?}", temp, dest))?;
-        Ok(())
+        crate::infra::atomic::write(dest, data)
     }
 }
 

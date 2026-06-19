@@ -1,7 +1,7 @@
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{ChildStderr, Command, Stdio};
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
@@ -84,11 +84,15 @@ pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
     // Validate configuration before starting.
     check_config(&config_path)?;
 
+    // We don't consume sing-box stdout; drop it to /dev/null so a verbose
+    // logger can't fill the pipe buffer (~64K) and wedge the child on write.
+    // stderr stays piped — on immediate exit we read it for diagnostics, and
+    // on success we hand it to a drain thread (see `spawn_stderr_drain`).
     let mut child = Command::new(singbox_binary())
         .arg("run")
         .arg("-c")
         .arg(&config_path)
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("Failed to start sing-box (binary: {})", singbox_binary()))?;
@@ -112,13 +116,32 @@ pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
             );
         }
         Ok(None) => {
-            // Process is still running — good.
+            // Process is still running — drain stderr so the child doesn't
+            // block on a full pipe buffer, then hand the child off.
+            if let Some(stderr) = child.stderr.take() {
+                spawn_stderr_drain(stderr);
+            }
             Ok(ProcessHandle::new(child))
         }
         Err(e) => {
             anyhow::bail!("Failed to check sing-box status: {}", e);
         }
     }
+}
+
+/// Forward sing-box stderr lines to the `singbox` tracing target so verbose
+/// output never wedges the child. The thread exits naturally on EOF (i.e.
+/// when sing-box is killed and the pipe closes).
+fn spawn_stderr_drain(stderr: ChildStderr) {
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => tracing::info!(target: "singbox", "{line}"),
+                Err(_) => break,
+            }
+        }
+    });
 }
 
 #[cfg(test)]
