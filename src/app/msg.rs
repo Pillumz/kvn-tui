@@ -3,6 +3,45 @@ use crate::config::profile::{DnsStrategy, Profile, Settings, Subscription};
 use crossterm::event::KeyEvent;
 use uuid::Uuid;
 
+/// Structured error carried inside `Msg` variants.
+///
+/// `chain` is ordered outermost first, matching `anyhow::Error::chain()` —
+/// element 0 is the high-level summary (suitable for the status bar), and
+/// later elements are the root causes added through `.context(...)`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IpcError {
+    pub chain: Vec<String>,
+}
+
+impl IpcError {
+    #[cfg(test)]
+    pub fn new<S: Into<String>>(msg: S) -> Self {
+        Self {
+            chain: vec![msg.into()],
+        }
+    }
+}
+
+impl std::fmt::Display for IpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, msg) in self.chain.iter().enumerate() {
+            if i > 0 {
+                write!(f, ": ")?;
+            }
+            write!(f, "{msg}")?;
+        }
+        Ok(())
+    }
+}
+
+impl From<anyhow::Error> for IpcError {
+    fn from(err: anyhow::Error) -> Self {
+        Self {
+            chain: err.chain().map(|c| c.to_string()).collect(),
+        }
+    }
+}
+
 pub enum Msg {
     Key(KeyEvent),
     Tick,
@@ -13,18 +52,18 @@ pub enum Msg {
     Connected {
         pid: u32,
     },
-    ConnectFailed(String),
+    ConnectFailed(IpcError),
     SubscriptionFetched {
         id: Uuid,
-        result: Result<Vec<crate::config::profile::Profile>, String>,
+        result: Result<Vec<crate::config::profile::Profile>, IpcError>,
     },
 
     IpcCommand(IpcCommand),
     StateUpdate(StateSnapshot),
-    ConfigReloaded(Result<crate::config::profile::Config, String>),
+    ConfigReloaded(Result<crate::config::profile::Config, IpcError>),
     KillSwitchApplied {
         enabled: bool,
-        error: Option<String>,
+        error: Option<IpcError>,
     },
     /// Raw sample of cumulative byte counters from sing-box's Clash API,
     /// timestamped so the pure-layer can compute a per-second rate against

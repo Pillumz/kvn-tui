@@ -151,7 +151,7 @@ fn handle_traffic_stats_updated(
 fn handle_kill_switch_applied(
     model: &mut Model,
     enabled: bool,
-    error: Option<String>,
+    error: Option<crate::app::msg::IpcError>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     match error {
@@ -208,7 +208,7 @@ fn push_status(effects: &mut Vec<Effect>, model: &mut Model, status: AppStatus) 
 
 fn handle_config_reloaded(
     model: &mut Model,
-    result: Result<crate::config::profile::Config, String>,
+    result: Result<crate::config::profile::Config, crate::app::msg::IpcError>,
 ) -> Vec<Effect> {
     match result {
         Ok(config) => {
@@ -1112,7 +1112,7 @@ fn add_and_fetch_subscription(model: &mut Model, url: &str) -> Vec<Effect> {
 fn handle_subscription_result(
     model: &mut Model,
     id: Uuid,
-    result: Result<Vec<Profile>, String>,
+    result: Result<Vec<Profile>, crate::app::msg::IpcError>,
 ) -> Vec<Effect> {
     let managed = !id.is_nil();
     model.subscription_updates.remove(&id);
@@ -1445,7 +1445,7 @@ mod tests {
         let mut model = model_with_profiles(vec![]);
         let effects = update(
             &mut model,
-            Msg::ConfigReloaded(Err("parse error".to_string())),
+            Msg::ConfigReloaded(Err(crate::app::msg::IpcError::new("parse error"))),
         );
         assert_eq!(
             effects,
@@ -2013,7 +2013,10 @@ mod tests {
     #[test]
     fn connect_failed_sets_error_mode() {
         let mut model = Model::test_new(crate::config::profile::Config::default());
-        let effects = update(&mut model, Msg::ConnectFailed("timeout".into()));
+        let effects = update(
+            &mut model,
+            Msg::ConnectFailed(crate::app::msg::IpcError::new("timeout")),
+        );
         assert_eq!(model.overlay, Overlay::Error);
         assert_eq!(model.connection, ConnectionState::Idle);
         assert_eq!(
@@ -2141,7 +2144,7 @@ mod tests {
             &mut model,
             Msg::KillSwitchApplied {
                 enabled: true,
-                error: Some("helper missing".into()),
+                error: Some(crate::app::msg::IpcError::new("helper missing")),
             },
         );
         assert!(!model.config.settings.kill_switch);
@@ -2395,8 +2398,11 @@ mod tests {
     fn subscription_fetched_error_logs_failure() {
         let mut model = model_with_profiles(vec![]);
 
-        let effects =
-            handle_subscription_result(&mut model, Uuid::nil(), Err("network down".to_string()));
+        let effects = handle_subscription_result(
+            &mut model,
+            Uuid::nil(),
+            Err(crate::app::msg::IpcError::new("network down")),
+        );
 
         assert!(!model.subscription_fetching);
         assert_eq!(

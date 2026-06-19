@@ -30,7 +30,7 @@ pub fn run(mut model: Model) -> Result<()> {
     let result = run_loop(&mut model, rx, &tx, process_slot.clone(), &ipc_server);
 
     // Cleanup
-    if let Some(mut handle) = process_slot.lock().unwrap().take() {
+    if let Some(mut handle) = lock_process_slot(&process_slot).take() {
         if let Err(e) = handle.kill_and_wait() {
             tracing::warn!("Failed to stop sing-box on exit: {}", e);
         }
@@ -92,13 +92,9 @@ fn execute_daemon_effect(
 ) -> Result<()> {
     match effect {
         Effect::Connect { profile, settings } => {
-            if let Some(mut handle) = process_slot.lock().unwrap().take() {
+            if let Some(mut handle) = lock_process_slot(process_slot).take() {
                 if let Err(e) = handle.kill_and_wait() {
                     tracing::warn!("Failed to stop sing-box process: {}", e);
-                }
-            } else if let Some(pid) = model.singbox_pid {
-                unsafe {
-                    let _ = libc::kill(pid as i32, libc::SIGTERM);
                 }
             }
             model.connection = ConnectionState::ConnectPending;
@@ -109,33 +105,29 @@ fn execute_daemon_effect(
             thread::spawn(move || {
                 if kill_switch {
                     if let Err(e) = open_handshake_window(&profile, &dns) {
-                        let _ = tx.send(Msg::ConnectFailed(format!(
-                            "kill switch handshake setup failed: {}",
-                            e
-                        )));
+                        let err = crate::app::msg::IpcError::from(
+                            e.context("kill switch handshake setup failed"),
+                        );
+                        let _ = tx.send(Msg::ConnectFailed(err));
                         return;
                     }
                 }
                 match crate::singbox::runner::start(&profile, &settings) {
                     Ok(handle) => {
                         let pid = handle.pid;
-                        *slot.lock().unwrap() = Some(handle);
+                        *lock_process_slot(&slot) = Some(handle);
                         let _ = tx.send(Msg::Connected { pid });
                     }
                     Err(e) => {
-                        let _ = tx.send(Msg::ConnectFailed(e.to_string()));
+                        let _ = tx.send(Msg::ConnectFailed(crate::app::msg::IpcError::from(e)));
                     }
                 }
             });
         }
         Effect::Disconnect => {
-            if let Some(mut handle) = process_slot.lock().unwrap().take() {
+            if let Some(mut handle) = lock_process_slot(process_slot).take() {
                 if let Err(e) = handle.kill_and_wait() {
                     tracing::warn!("Failed to stop sing-box process: {}", e);
-                }
-            } else if let Some(pid) = model.singbox_pid {
-                unsafe {
-                    let _ = libc::kill(pid as i32, libc::SIGTERM);
                 }
             }
             model.connection = ConnectionState::Idle;
@@ -232,7 +224,7 @@ fn execute_daemon_effect(
                 let tx = tx.clone();
                 thread::spawn(move || {
                     let result = crate::infra::subscription::fetch_subscription(&url)
-                        .map_err(|e| e.to_string());
+                        .map_err(crate::app::msg::IpcError::from);
                     let _ = tx.send(Msg::SubscriptionFetched { id, result });
                 });
             }
@@ -251,12 +243,8 @@ fn execute_daemon_effect(
             let tx = tx.clone();
             thread::spawn(move || {
                 let result = crate::config::load_config()
-                    .map_err(|e| e.to_string())
-                    .map(|c| c.validate().map(|_| c).map_err(|e| e.to_string()));
-                let result = match result {
-                    Ok(Ok(c)) => Ok(c),
-                    Ok(Err(e)) | Err(e) => Err(e),
-                };
+                    .and_then(|c| c.validate().map(|_| c))
+                    .map_err(crate::app::msg::IpcError::from);
                 let _ = tx.send(Msg::ConfigReloaded(result));
             });
         }
@@ -265,7 +253,7 @@ fn execute_daemon_effect(
             thread::spawn(move || {
                 let error = crate::services::killswitch::apply(enabled)
                     .err()
-                    .map(|e| e.to_string());
+                    .map(crate::app::msg::IpcError::from);
                 let _ = tx.send(Msg::KillSwitchApplied { enabled, error });
             });
         }
@@ -429,6 +417,19 @@ fn spawn_ticker(tx: Sender<Msg>) {
             }
         }
     });
+}
+
+/// Lock the sing-box process slot, recovering from poisoned-mutex state.
+///
+/// If a worker thread panicked while holding this lock, the standard
+/// `lock().unwrap()` would re-panic on the next access and we'd lose our
+/// chance to kill sing-box on shutdown. The invariant we care about — an
+/// `Option<ProcessHandle>` — cannot be left half-written across an `unwind`
+/// boundary, so taking the inner guard is safe.
+fn lock_process_slot(
+    slot: &Arc<Mutex<Option<ProcessHandle>>>,
+) -> std::sync::MutexGuard<'_, Option<ProcessHandle>> {
+    slot.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn spawn_suspend_watcher(tx: Sender<Msg>) {
