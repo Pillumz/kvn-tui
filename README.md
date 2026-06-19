@@ -18,8 +18,8 @@
 
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
 - **Profile management** — edit via `$EDITOR`, delete, and organize server profiles
-- **One-click paste** — import `vless://` share links or subscription URLs directly from the Wayland clipboard
-- **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, one `vless://` per line); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
+- **One-click paste** — import share links for any supported protocol or subscription URLs directly from the Wayland clipboard
+- **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
 - **Geo region selection** — choose Russia, China, Iran, or Global on first launch; only relevant routing modes and geo databases are shown/downloaded
 - **Routing modes** — Global, Bypass RU, Only RU, Bypass CN, Only CN, Bypass IR, Only IR (powered by geoip/geosite rule-sets)
 - **Geo database updates** — download and update rule-sets from within the app
@@ -33,13 +33,21 @@
 
 ## Supported Protocols
 
-| Protocol | Status | Notes |
-|----------|--------|-------|
-| **VLESS** | ✅ Supported | REALITY / XTLS Vision, gRPC, WebSocket, HTTPUpgrade |
+All sing-box 1.12+ outbound protocols are supported. Share links can be pasted directly from the clipboard or fetched via subscription URLs.
 
-VLESS share links (`vless://`) can be pasted directly from the clipboard. The parser automatically extracts UUID, server address, port, flow, security settings, transport type, and REALITY parameters (public key, short ID, SNI, fingerprint).
-
-> **Note:** Only VLESS is supported in the current release. Additional protocols may be added in future versions.
+| Protocol | Share-link scheme(s) | Notes |
+|----------|----------------------|-------|
+| **VLESS** | `vless://` | REALITY, XTLS Vision, TLS; gRPC / WebSocket / HTTPUpgrade transport |
+| **VMess** | `vmess://` | TLS; gRPC / WebSocket / HTTPUpgrade transport; base64-JSON and URI forms |
+| **Trojan** | `trojan://` | TLS; gRPC / WebSocket / HTTPUpgrade transport |
+| **Shadowsocks** | `ss://` | AEAD-2022 + AEAD ciphers; SIP002 and legacy base64 share-link forms |
+| **Hysteria 2** | `hysteria2://`, `hy2://` | QUIC; Salamander obfuscation |
+| **TUIC** | `tuic://` | QUIC; BBR / Cubic / NewReno congestion control |
+| **ShadowTLS** | `shadowtls://` | v1 / v2 / v3; wraps Shadowsocks as the inner transport |
+| **AnyTLS** | `anytls://` | TLS-based multiplexing |
+| **SOCKS** | `socks://`, `socks5://` | v5 (default) / v4a; optional username/password |
+| **HTTP proxy** | `http://`, `https://` | Plain or TLS CONNECT proxy |
+| **SSH** | `ssh://` | Password or private-key auth |
 
 ---
 
@@ -225,7 +233,7 @@ kvn-tui
 | `g` | Go to first profile |
 | `G` | Go to last profile |
 | `Enter` | Connect to selected profile |
-| `p` | Paste `vless://` link from clipboard |
+| `p` | Paste share link or subscription URL from clipboard |
 | `d` | Delete selected profile |
 | `m` | Change routing mode |
 | `o` | Select geo region |
@@ -290,9 +298,9 @@ Logs (both sing-box output and app status messages) are written to:
 
 - ~~**Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly~~ ✅ Done
 - ~~**DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)~~ ✅ Done
-- **All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports
+- ~~**All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports~~ ✅ Done
 - **Traffic statistics** — live bandwidth and connection stats in the TUI
-- **Import/Export profiles** — bulk import from subscription links and export profiles to shareable links
+- **Export profiles** — export profiles to shareable links
 
 ---
 

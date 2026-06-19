@@ -512,7 +512,7 @@ fn profile_line(
     let name_width = remaining.saturating_sub(addr_width).max(MIN_NAME_WIDTH);
 
     let name_col = fit_to_visual_width(&profile.name, name_width);
-    let protocol_col = fit_to_visual_width(&profile.protocol.to_string(), PROTOCOL_WIDTH);
+    let protocol_col = fit_to_visual_width(profile.protocol_label(), PROTOCOL_WIDTH);
     let addr_col = truncate_to_visual_width(&addr_port, addr_width);
 
     let style = if is_selected && is_connected {
@@ -573,7 +573,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 mod tests {
     use super::*;
     use crate::app::model::{ConnectionState, Overlay};
-    use crate::config::profile::{Profile, Protocol};
+    use crate::config::profile::Profile;
     use crate::test_helpers::{buffer_to_string, model_with_profiles};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -742,9 +742,8 @@ mod tests {
 
     #[test]
     fn draw_main_snapshot() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Alpha".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -767,9 +766,8 @@ mod tests {
 
     #[test]
     fn draw_confirm_delete_overlay_snapshot() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Alpha".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -848,24 +846,21 @@ mod tests {
 
         let sub_id = Uuid::new_v4();
         let profiles = vec![
-            Profile::new(
+            Profile::new_vless(
                 "Alpha".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "Beta".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
             ),
             {
-                let mut p = Profile::new(
+                let mut p = Profile::new_vless(
                     "Gamma".to_string(),
-                    Protocol::Vless,
                     "3.3.3.3".to_string(),
                     443,
                     "u3".to_string(),
@@ -874,9 +869,8 @@ mod tests {
                 p
             },
             {
-                let mut p = Profile::new(
+                let mut p = Profile::new_vless(
                     "Delta".to_string(),
-                    Protocol::Vless,
                     "4.4.4.4".to_string(),
                     443,
                     "u4".to_string(),
@@ -901,16 +895,14 @@ mod tests {
     #[test]
     fn draw_sources_long_name_truncated() {
         let profiles = vec![
-            Profile::new(
+            Profile::new_vless(
                 "VeryLongProfileNameThatMustBeTruncated".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "Second".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -922,19 +914,137 @@ mod tests {
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
 
+    /// Verify every protocol's UI badge renders without truncation.
     #[test]
-    fn draw_sources_connected_profile_colored() {
-        let mut model = model_with_profiles(vec![
-            Profile::new(
-                "Alpha".to_string(),
-                Protocol::Vless,
+    fn draw_sources_multi_protocol_badges_snapshot() {
+        use crate::config::profile::{
+            AnytlsConfig, HttpConfig, Hysteria2Config, ProtocolConfig, ShadowsocksCipher,
+            ShadowsocksConfig, ShadowtlsConfig, SocksConfig, SshConfig, TrojanConfig, TuicConfig,
+            VmessConfig,
+        };
+        use uuid::Uuid;
+
+        let make = |name: &str, address: &str, port: u16, config: ProtocolConfig| Profile {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            address: address.to_string(),
+            port,
+            config,
+            tags: vec![],
+            subscription_id: None,
+        };
+
+        let profiles = vec![
+            Profile::new_vless(
+                "A-vless".to_string(),
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            make(
+                "B-vmess",
+                "2.2.2.2",
+                443,
+                ProtocolConfig::Vmess(VmessConfig {
+                    uuid: "u2".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "C-trojan",
+                "3.3.3.3",
+                443,
+                ProtocolConfig::Trojan(TrojanConfig {
+                    password: "pw".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "D-ss",
+                "4.4.4.4",
+                8388,
+                ProtocolConfig::Shadowsocks(ShadowsocksConfig {
+                    method: ShadowsocksCipher::Chacha20IetfPoly1305,
+                    password: "pw".to_string(),
+                }),
+            ),
+            make(
+                "E-hy2",
+                "5.5.5.5",
+                443,
+                ProtocolConfig::Hysteria2(Hysteria2Config {
+                    password: "pw".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "F-tuic",
+                "6.6.6.6",
+                443,
+                ProtocolConfig::Tuic(TuicConfig {
+                    uuid: "u6".to_string(),
+                    password: "pw".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "G-stls",
+                "7.7.7.7",
+                443,
+                ProtocolConfig::Shadowtls(ShadowtlsConfig {
+                    password: "pw".to_string(),
+                    ss_password: "sp".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "H-anytls",
+                "8.8.8.8",
+                443,
+                ProtocolConfig::Anytls(AnytlsConfig {
+                    password: "pw".to_string(),
+                    ..Default::default()
+                }),
+            ),
+            make(
+                "I-socks",
+                "9.9.9.9",
+                1080,
+                ProtocolConfig::Socks(SocksConfig::default()),
+            ),
+            make(
+                "J-http",
+                "10.0.0.1",
+                8080,
+                ProtocolConfig::Http(HttpConfig::default()),
+            ),
+            make(
+                "K-ssh",
+                "10.0.0.2",
+                22,
+                ProtocolConfig::Ssh(SshConfig {
+                    user: "root".to_string(),
+                    ..Default::default()
+                }),
+            ),
+        ];
+        let mut model = model_with_profiles(profiles);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.selected = 0;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 26));
+    }
+
+    #[test]
+    fn draw_sources_connected_profile_colored() {
+        let mut model = model_with_profiles(vec![
+            Profile::new_vless(
+                "Alpha".to_string(),
+                "1.1.1.1".to_string(),
+                443,
+                "u1".to_string(),
+            ),
+            Profile::new_vless(
                 "Beta".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),

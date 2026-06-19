@@ -3,7 +3,7 @@ use ratatui::buffer::Buffer;
 use std::sync::Mutex;
 
 use crate::app::model::Model;
-use crate::config::profile::{Config, Profile, Protocol};
+use crate::config::profile::{Config, Profile};
 
 /// Global lock for tests that mutate environment variables.
 /// Prevents race conditions when running tests in parallel.
@@ -22,23 +22,20 @@ pub fn buffer_to_string(buffer: &Buffer) -> String {
 /// Generate a small set of sample profiles for unit tests.
 pub fn sample_profiles() -> Vec<Profile> {
     vec![
-        Profile::new(
+        Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
         ),
-        Profile::new(
+        Profile::new_vless(
             "B".to_string(),
-            Protocol::Vless,
             "2.2.2.2".to_string(),
             443,
             "u2".to_string(),
         ),
-        Profile::new(
+        Profile::new_vless(
             "C".to_string(),
-            Protocol::Vless,
             "3.3.3.3".to_string(),
             443,
             "u3".to_string(),

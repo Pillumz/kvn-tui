@@ -92,9 +92,8 @@ mod tests {
             .settings
             .geo_routing
             .set_mode(profile::RoutingMode::OnlyRu);
-        config.profiles.push(profile::Profile::new(
+        config.profiles.push(profile::Profile::new_vless(
             "Test".to_string(),
-            profile::Protocol::Vless,
             "1.2.3.4".to_string(),
             443,
             "uuid".to_string(),
@@ -134,9 +133,8 @@ mod tests {
         assert!(config.profiles.is_empty());
 
         let mut config = Config::default();
-        config.profiles.push(profile::Profile::new(
+        config.profiles.push(profile::Profile::new_vless(
             "PathTest".to_string(),
-            profile::Protocol::Vless,
             "9.9.9.9".to_string(),
             443,
             "uuid".to_string(),

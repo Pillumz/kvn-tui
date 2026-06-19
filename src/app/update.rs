@@ -1,8 +1,6 @@
 use crate::app::effect::Effect;
 use crate::app::model::{AppStatus, ConnectionState, Model, Overlay};
 use crate::app::msg::{GeoResult, Msg};
-#[cfg(test)]
-use crate::config::profile::Protocol;
 use crate::config::profile::{GeoRegion, Profile, Subscription, SubscriptionAutoUpdate};
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -1047,18 +1045,18 @@ fn handle_subscription_result(
         Ok(profiles) => {
             let mut imported = 0;
             for mut profile in profiles {
+                let key = profile.dedup_key();
                 if let Some(idx) = model
                     .config
                     .profiles
                     .iter()
-                    .position(|p| p.uuid == profile.uuid)
+                    .position(|p| p.dedup_key() == key)
                 {
                     let existing = &model.config.profiles[idx];
                     if existing.subscription_id.is_none() {
                         // Update the standalone profile in place and link it to
                         // the subscription, preserving its identity.
                         profile.id = existing.id;
-                        profile.uuid.clone_from(&existing.uuid);
                         if managed {
                             profile.subscription_id = Some(id);
                         }
@@ -1197,16 +1195,14 @@ mod tests {
     #[test]
     fn normal_mode_navigates() {
         let mut model = model_with_profiles(vec![
-            Profile::new(
+            Profile::new_vless(
                 "A".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "B".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -1225,9 +1221,8 @@ mod tests {
 
     #[test]
     fn normal_mode_enter_connects() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1254,9 +1249,8 @@ mod tests {
         use uuid::Uuid;
 
         let sub_id = Uuid::new_v4();
-        let mut profile = Profile::new(
+        let mut profile = Profile::new_vless(
             "SubProfile".to_string(),
-            Protocol::Vless,
             "2.2.2.2".to_string(),
             443,
             "u2".to_string(),
@@ -1299,9 +1293,8 @@ mod tests {
 
     #[test]
     fn normal_mode_d_confirms_delete() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1342,9 +1335,8 @@ mod tests {
 
     #[test]
     fn config_reloaded_updates_model() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1377,16 +1369,14 @@ mod tests {
     #[test]
     fn ipc_command_key_navigates() {
         let mut model = model_with_profiles(vec![
-            Profile::new(
+            Profile::new_vless(
                 "A".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "B".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -1437,9 +1427,8 @@ mod tests {
 
     #[test]
     fn confirm_delete_yes() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1456,9 +1445,8 @@ mod tests {
 
     #[test]
     fn confirm_delete_no() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1702,9 +1690,8 @@ mod tests {
 
     #[test]
     fn geo_region_triggers_auto_connect_after_selection() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Auto".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1867,16 +1854,14 @@ mod tests {
     #[test]
     fn connected_mode_navigates() {
         let mut model = model_with_profiles(vec![
-            Profile::new(
+            Profile::new_vless(
                 "A".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "B".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -1897,9 +1882,8 @@ mod tests {
 
     #[test]
     fn connected_mode_enter_connects() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1913,9 +1897,8 @@ mod tests {
 
     #[test]
     fn connected_mode_r_reconnects() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1954,9 +1937,8 @@ mod tests {
 
     #[test]
     fn handle_tick_skips_connect_when_pending() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -1978,9 +1960,8 @@ mod tests {
 
     #[test]
     fn connected_saves_last_profile() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -2153,16 +2134,14 @@ mod tests {
     fn subscription_fetched_adds_profiles_and_saves() {
         let mut model = model_with_profiles(vec![]);
         let profiles = vec![
-            Profile::new(
+            Profile::new_vless(
                 "Sub1".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "Sub2".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -2184,24 +2163,21 @@ mod tests {
 
     #[test]
     fn subscription_fetched_updates_standalone_duplicate() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Existing".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
         )]);
         let profiles = vec![
-            Profile::new(
+            Profile::new_vless(
                 "Existing".to_string(),
-                Protocol::Vless,
                 "1.1.1.1".to_string(),
                 443,
                 "u1".to_string(),
             ),
-            Profile::new(
+            Profile::new_vless(
                 "New".to_string(),
-                Protocol::Vless,
                 "2.2.2.2".to_string(),
                 443,
                 "u2".to_string(),
@@ -2223,9 +2199,8 @@ mod tests {
     #[test]
     fn subscription_fetched_skips_duplicate_from_other_subscription() {
         let other_sub_id = Uuid::new_v4();
-        let mut existing = Profile::new(
+        let mut existing = Profile::new_vless(
             "Existing".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -2249,9 +2224,8 @@ mod tests {
             last_updated: None,
         });
 
-        let fetched = Profile::new(
+        let fetched = Profile::new_vless(
             "Existing".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -2273,9 +2247,8 @@ mod tests {
     #[test]
     fn subscription_fetched_attaches_standalone_duplicate() {
         let sub_id = Uuid::new_v4();
-        let standalone = Profile::new(
+        let standalone = Profile::new_vless(
             "OldName".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -2290,9 +2263,8 @@ mod tests {
             last_updated: None,
         });
 
-        let mut fetched = Profile::new(
+        let mut fetched = Profile::new_vless(
             "NewName".to_string(),
-            Protocol::Vless,
             "2.2.2.2".to_string(),
             443,
             "u1".to_string(),
@@ -2346,9 +2318,8 @@ mod tests {
     #[test]
     fn subscription_fetched_managed_replaces_profiles_and_updates_last_updated() {
         let sub_id = Uuid::new_v4();
-        let mut existing = Profile::new(
+        let mut existing = Profile::new_vless(
             "Old".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -2363,9 +2334,8 @@ mod tests {
             last_updated: None,
         });
 
-        let new_profiles = vec![Profile::new(
+        let new_profiles = vec![Profile::new_vless(
             "New".to_string(),
-            Protocol::Vless,
             "2.2.2.2".to_string(),
             443,
             "u2".to_string(),
@@ -2488,9 +2458,8 @@ mod tests {
     #[test]
     fn confirm_delete_subscription_removes_subscription_and_profiles() {
         let sub_id = Uuid::new_v4();
-        let mut existing = Profile::new(
+        let mut existing = Profile::new_vless(
             "Old".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),

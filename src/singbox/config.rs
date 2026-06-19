@@ -1,7 +1,12 @@
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 
-use crate::config::profile::{DnsConfig, DnsServer, Profile, RoutingMode, Settings, TransportType};
+use crate::config::profile::{
+    AnytlsConfig, DnsConfig, DnsServer, HttpConfig, Hysteria2Config, Profile, ProtocolConfig,
+    RoutingMode, Settings, ShadowsocksConfig, ShadowtlsConfig, ShadowtlsVersion, SocksConfig,
+    SshConfig, TlsCommon, TransportConfig, TransportType, TrojanConfig, TuicConfig, VlessConfig,
+    VmessConfig,
+};
 
 /// Availability of local geoip/geosite rule-sets used when building routes.
 /// Each region is present only when both files exist.
@@ -40,7 +45,8 @@ pub fn generate_config(
     settings: &Settings,
     geo: &GeoAvailability,
 ) -> anyhow::Result<Value> {
-    let outbound = build_outbound(profile)?;
+    let mut proxy_outbounds = build_outbound(profile)?;
+    proxy_outbounds.push(json!({ "type": "direct", "tag": "direct" }));
     let (route, rule_sets) = build_route(&settings.geo_routing.mode(), &settings.dns, geo);
     let dns = build_dns(&settings.dns);
 
@@ -69,13 +75,7 @@ pub fn generate_config(
                 "stack": "gvisor"
             }
         ],
-        "outbounds": [
-            outbound,
-            {
-                "type": "direct",
-                "tag": "direct"
-            }
-        ],
+        "outbounds": proxy_outbounds,
         "route": route,
         "experimental": {
             "cache_file": cache_file
@@ -435,35 +435,135 @@ fn build_route(
     (route, rule_sets)
 }
 
-/// Build the outbound object based on profile protocol and settings.
-fn build_outbound(profile: &Profile) -> anyhow::Result<Value> {
-    build_vless_outbound(profile)
+/// Build the proxy outbound list for a profile. Most protocols return a
+/// single outbound tagged `proxy`; ShadowTLS returns two (the wrapper plus
+/// an inner Shadowsocks detour, with the SS half tagged `proxy`).
+fn build_outbound(profile: &Profile) -> anyhow::Result<Vec<Value>> {
+    let outbounds = match &profile.config {
+        ProtocolConfig::Vless(cfg) => vec![build_vless_outbound(profile, cfg)?],
+        ProtocolConfig::Vmess(cfg) => vec![build_vmess_outbound(profile, cfg)?],
+        ProtocolConfig::Trojan(cfg) => vec![build_trojan_outbound(profile, cfg)?],
+        ProtocolConfig::Shadowsocks(cfg) => vec![build_shadowsocks_outbound(profile, cfg)?],
+        ProtocolConfig::Hysteria2(cfg) => vec![build_hysteria2_outbound(profile, cfg)?],
+        ProtocolConfig::Tuic(cfg) => vec![build_tuic_outbound(profile, cfg)?],
+        ProtocolConfig::Shadowtls(cfg) => build_shadowtls_outbounds(profile, cfg)?,
+        ProtocolConfig::Anytls(cfg) => vec![build_anytls_outbound(profile, cfg)?],
+        ProtocolConfig::Socks(cfg) => vec![build_socks_outbound(profile, cfg)?],
+        ProtocolConfig::Http(cfg) => vec![build_http_outbound(profile, cfg)?],
+        ProtocolConfig::Ssh(cfg) => vec![build_ssh_outbound(profile, cfg)?],
+    };
+    Ok(outbounds)
 }
 
-/// Build VLESS outbound with optional REALITY / XTLS Vision.
-fn build_vless_outbound(profile: &Profile) -> anyhow::Result<Value> {
-    let tls = if let Some(ref reality) = profile.reality {
-        let fingerprint = profile.fingerprint.as_deref().unwrap_or("chrome");
-        let reality_json = json!({
-            "enabled": true,
-            "public_key": reality.public_key,
-            "short_id": reality.short_id
-        });
+/// Render the sing-box 1.12 `tls` block from [`TlsCommon`].
+/// `default_sni` is used when `tls.server_name` is unset (typically the
+/// profile address). `default_alpn` is used when `tls.alpn` is empty
+/// (e.g. `["h3"]` for QUIC-based protocols).
+fn build_tls_block(default_sni: &str, default_alpn: &[&str], tls: &TlsCommon) -> Value {
+    let mut block = Map::new();
+    block.insert("enabled".to_string(), json!(true));
+    let sni = tls.server_name.as_deref().unwrap_or(default_sni);
+    block.insert("server_name".to_string(), json!(sni));
+    if tls.insecure {
+        block.insert("insecure".to_string(), json!(true));
+    }
+    let alpn: Vec<&str> = if tls.alpn.is_empty() {
+        default_alpn.to_vec()
+    } else {
+        tls.alpn.iter().map(String::as_str).collect()
+    };
+    if !alpn.is_empty() {
+        block.insert("alpn".to_string(), json!(alpn));
+    }
+    if let Some(fp) = tls.utls_fingerprint.as_deref() {
+        block.insert(
+            "utls".to_string(),
+            json!({ "enabled": true, "fingerprint": fp }),
+        );
+    }
+    if let Some(reality) = &tls.reality {
+        block.insert("server_name".to_string(), json!(reality.server_name));
+        block.insert(
+            "reality".to_string(),
+            json!({
+                "enabled": true,
+                "public_key": reality.public_key,
+                "short_id": reality.short_id,
+            }),
+        );
+    }
+    if let Some(ech) = tls.ech.as_ref().filter(|e| e.enabled) {
+        let mut ech_block = json!({ "enabled": true });
+        if !ech.config.is_empty() {
+            ech_block["config"] = json!(ech.config);
+        }
+        block.insert("ech".to_string(), ech_block);
+    }
+    Value::Object(block)
+}
+
+/// Render the sing-box 1.12 `transport` block from [`TransportConfig`].
+fn build_transport_block(t: &TransportConfig) -> Value {
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), json!(transport_type_str(&t.kind)));
+    if let Some(path) = t.path.as_deref() {
+        obj.insert("path".to_string(), json!(path));
+    }
+    if let Some(host) = t.host.as_deref() {
+        obj.insert("host".to_string(), json!(host));
+    }
+    if let Some(service_name) = t.service_name.as_deref() {
+        obj.insert("service_name".to_string(), json!(service_name));
+    }
+    if t.kind == TransportType::Grpc {
+        obj.entry("idle_timeout").or_insert(json!("15s"));
+        obj.entry("ping_timeout").or_insert(json!("15s"));
+    }
+    if !t.headers.is_empty() {
+        obj.insert("headers".to_string(), json!(t.headers));
+    }
+    Value::Object(obj)
+}
+
+fn transport_type_str(kind: &TransportType) -> &'static str {
+    match kind {
+        TransportType::Grpc => "grpc",
+        TransportType::Ws => "ws",
+        TransportType::Http => "http",
+    }
+}
+
+/// Build VLESS outbound with optional REALITY / XTLS Vision / ECH.
+fn build_vless_outbound(profile: &Profile, cfg: &VlessConfig) -> anyhow::Result<Value> {
+    let tls = if let Some(ref reality) = cfg.reality {
+        let fingerprint = cfg.fingerprint.as_deref().unwrap_or("chrome");
         json!({
             "enabled": true,
             "server_name": reality.server_name,
-            "utls": {
+            "utls": { "enabled": true, "fingerprint": fingerprint },
+            "reality": {
                 "enabled": true,
-                "fingerprint": fingerprint
-            },
-            "reality": reality_json
+                "public_key": reality.public_key,
+                "short_id": reality.short_id,
+            }
         })
     } else {
-        json!({
+        let mut tls = json!({
             "enabled": true,
             "server_name": profile.address,
             "insecure": false
-        })
+        });
+        if let Some(fp) = cfg.fingerprint.as_deref() {
+            tls["utls"] = json!({ "enabled": true, "fingerprint": fp });
+        }
+        if let Some(ech) = cfg.ech.as_ref().filter(|e| e.enabled) {
+            let mut ech_block = json!({ "enabled": true });
+            if !ech.config.is_empty() {
+                ech_block["config"] = json!(ech.config);
+            }
+            tls["ech"] = ech_block;
+        }
+        tls
     };
 
     let mut outbound = json!({
@@ -471,20 +571,19 @@ fn build_vless_outbound(profile: &Profile) -> anyhow::Result<Value> {
         "tag": "proxy",
         "server": profile.address,
         "server_port": profile.port,
-        "uuid": profile.uuid,
+        "uuid": cfg.uuid,
         "packet_encoding": "xudp",
         "tls": tls
     });
 
-    if let Some(ref flow) = profile.flow {
+    if let Some(ref flow) = cfg.flow {
         outbound["flow"] = json!(flow);
     }
 
-    // Add transport layer if specified (grpc, ws, httpupgrade, etc.)
-    if let Some(ref transport_type) = profile.transport_type {
-        let mut transport = json!({"type": transport_type});
+    if let Some(ref transport_type) = cfg.transport_type {
+        let mut transport = json!({ "type": transport_type_str(transport_type) });
         if *transport_type == TransportType::Grpc {
-            if let Some(ref service_name) = profile.transport_service_name {
+            if let Some(ref service_name) = cfg.transport_service_name {
                 transport["service_name"] = json!(service_name);
             }
             transport["idle_timeout"] = json!("15s");
@@ -496,31 +595,287 @@ fn build_vless_outbound(profile: &Profile) -> anyhow::Result<Value> {
     Ok(outbound)
 }
 
+/// Build VMess outbound (sing-box 1.12: explicit `security` cipher, no
+/// deprecated `aes-128-cfb`; `alter_id: 0` for AEAD-only mode).
+fn build_vmess_outbound(profile: &Profile, cfg: &VmessConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "vmess",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "uuid": cfg.uuid,
+        "security": cfg.security.as_str(),
+        "alter_id": cfg.alter_id,
+        "packet_encoding": "xudp",
+        "tls": build_tls_block(&profile.address, &[], &cfg.tls),
+    });
+    if let Some(padding) = cfg.global_padding {
+        outbound["global_padding"] = json!(padding);
+    }
+    if let Some(transport) = cfg.transport.as_ref() {
+        outbound["transport"] = build_transport_block(transport);
+    }
+    Ok(outbound)
+}
+
+/// Build Trojan outbound.
+fn build_trojan_outbound(profile: &Profile, cfg: &TrojanConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "trojan",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "password": cfg.password,
+        "tls": build_tls_block(&profile.address, &[], &cfg.tls),
+    });
+    if let Some(transport) = cfg.transport.as_ref() {
+        outbound["transport"] = build_transport_block(transport);
+    }
+    Ok(outbound)
+}
+
+/// Build Shadowsocks outbound (AEAD/AEAD-2022 ciphers only).
+fn build_shadowsocks_outbound(profile: &Profile, cfg: &ShadowsocksConfig) -> anyhow::Result<Value> {
+    Ok(json!({
+        "type": "shadowsocks",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "method": cfg.method.as_str(),
+        "password": cfg.password,
+    }))
+}
+
+/// Build Hysteria2 outbound.
+///
+/// QUIC-based; ALPN defaults to `["h3"]` when not explicitly set.
+/// Uses the sing-box 1.12 nested `obfs: { type, password }` form (the
+/// legacy top-level `obfs_password` field is not emitted).
+fn build_hysteria2_outbound(profile: &Profile, cfg: &Hysteria2Config) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "hysteria2",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "password": cfg.password,
+        "tls": build_tls_block(&profile.address, &["h3"], &cfg.tls),
+    });
+    if let Some(up) = cfg.up_mbps {
+        outbound["up_mbps"] = json!(up);
+    }
+    if let Some(down) = cfg.down_mbps {
+        outbound["down_mbps"] = json!(down);
+    }
+    if let Some(obfs) = cfg.obfs.as_ref() {
+        outbound["obfs"] = json!({
+            "type": "salamander",
+            "password": obfs.password,
+        });
+        let _ = &obfs.kind; // single supported type today; kept for forward compat
+    }
+    Ok(outbound)
+}
+
+/// Build TUIC v5 outbound.
+fn build_tuic_outbound(profile: &Profile, cfg: &TuicConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "tuic",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "uuid": cfg.uuid,
+        "password": cfg.password,
+        "congestion_control": cfg.congestion_control.as_str(),
+        "udp_relay_mode": cfg.udp_relay_mode.as_str(),
+        "tls": build_tls_block(&profile.address, &["h3"], &cfg.tls),
+    });
+    if cfg.zero_rtt_handshake {
+        outbound["zero_rtt_handshake"] = json!(true);
+    }
+    Ok(outbound)
+}
+
+/// Build the ShadowTLS wrapper + inner Shadowsocks detour pair.
+/// The Shadowsocks outbound is tagged `proxy` (referenced by routing rules);
+/// the ShadowTLS outbound is tagged internally and chained via `detour`.
+fn build_shadowtls_outbounds(
+    profile: &Profile,
+    cfg: &ShadowtlsConfig,
+) -> anyhow::Result<Vec<Value>> {
+    const SHADOWTLS_TAG: &str = "shadowtls-wrap";
+
+    let mut shadowtls = json!({
+        "type": "shadowtls",
+        "tag": SHADOWTLS_TAG,
+        "server": profile.address,
+        "server_port": profile.port,
+        "version": cfg.version.as_u8(),
+        "tls": build_tls_block(&profile.address, &[], &cfg.tls),
+    });
+    if cfg.version == ShadowtlsVersion::V3 {
+        shadowtls["password"] = json!(cfg.password);
+    }
+
+    let shadowsocks = json!({
+        "type": "shadowsocks",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "method": cfg.method.as_str(),
+        "password": cfg.ss_password,
+        "detour": SHADOWTLS_TAG,
+    });
+
+    Ok(vec![shadowtls, shadowsocks])
+}
+
+/// Build AnyTLS outbound.
+fn build_anytls_outbound(profile: &Profile, cfg: &AnytlsConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "anytls",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "password": cfg.password,
+        "tls": build_tls_block(&profile.address, &[], &cfg.tls),
+    });
+    if let Some(v) = cfg.idle_session_check_interval.as_deref() {
+        outbound["idle_session_check_interval"] = json!(v);
+    }
+    if let Some(v) = cfg.idle_session_timeout.as_deref() {
+        outbound["idle_session_timeout"] = json!(v);
+    }
+    Ok(outbound)
+}
+
+/// Build SOCKS outbound (no TLS layer in sing-box; use ShadowTLS for that).
+fn build_socks_outbound(profile: &Profile, cfg: &SocksConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "socks",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "version": socks_version_str(&cfg.version),
+    });
+    if let Some(user) = cfg.username.as_deref() {
+        outbound["username"] = json!(user);
+    }
+    if let Some(pass) = cfg.password.as_deref() {
+        outbound["password"] = json!(pass);
+    }
+    Ok(outbound)
+}
+
+fn socks_version_str(v: &crate::config::profile::SocksVersion) -> &'static str {
+    use crate::config::profile::SocksVersion::*;
+    match v {
+        V4 => "4",
+        V4a => "4a",
+        V5 => "5",
+    }
+}
+
+/// Build HTTP CONNECT outbound (TLS optional via [`TlsCommon`]).
+fn build_http_outbound(profile: &Profile, cfg: &HttpConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "http",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+    });
+    if let Some(user) = cfg.username.as_deref() {
+        outbound["username"] = json!(user);
+    }
+    if let Some(pass) = cfg.password.as_deref() {
+        outbound["password"] = json!(pass);
+    }
+    if tls_is_enabled(&cfg.tls) {
+        outbound["tls"] = build_tls_block(&profile.address, &[], &cfg.tls);
+    }
+    Ok(outbound)
+}
+
+/// `TlsCommon::default()` represents "no TLS" — we treat a TLS block as
+/// enabled when the user supplied at least one TLS-related field.
+fn tls_is_enabled(tls: &TlsCommon) -> bool {
+    tls.server_name.is_some()
+        || tls.insecure
+        || !tls.alpn.is_empty()
+        || tls.utls_fingerprint.is_some()
+        || tls.reality.is_some()
+        || tls.ech.as_ref().is_some_and(|e| e.enabled)
+}
+
+/// Build SSH outbound.
+fn build_ssh_outbound(profile: &Profile, cfg: &SshConfig) -> anyhow::Result<Value> {
+    let mut outbound = json!({
+        "type": "ssh",
+        "tag": "proxy",
+        "server": profile.address,
+        "server_port": profile.port,
+        "user": cfg.user,
+    });
+    if let Some(pass) = cfg.password.as_deref() {
+        outbound["password"] = json!(pass);
+    }
+    if let Some(pk) = cfg.private_key.as_deref() {
+        outbound["private_key"] = json!(pk);
+    }
+    if let Some(pkp) = cfg.private_key_path.as_deref() {
+        outbound["private_key_path"] = json!(pkp);
+    }
+    if let Some(passphrase) = cfg.private_key_passphrase.as_deref() {
+        outbound["private_key_passphrase"] = json!(passphrase);
+    }
+    if !cfg.host_key.is_empty() {
+        outbound["host_key"] = json!(cfg.host_key);
+    }
+    if !cfg.host_key_algorithms.is_empty() {
+        outbound["host_key_algorithms"] = json!(cfg.host_key_algorithms);
+    }
+    Ok(outbound)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::profile::{
-        DnsRule, DnsStrategy, GeoRegion, GeoRouting, Profile, Protocol, RealitySettings,
+        DnsRule, DnsStrategy, GeoRegion, GeoRouting, Profile, ProtocolConfig, RealitySettings,
     };
 
     fn test_profile() -> Profile {
-        let mut p = Profile::new(
+        let mut p = Profile::new_vless(
             "Example".to_string(),
-            Protocol::Vless,
             "203.0.113.42".to_string(),
             59431,
             "671c62c7-6768-4b98-ac6b-572c9c707be0".to_string(),
         );
-        p.security = Some(crate::config::profile::Security::Reality);
-        p.reality = Some(RealitySettings {
-            public_key: "0IO3LodsrMnhOWh4ogwgdVqYg30CS5-snhFMwldOuAQ".to_string(),
-            short_id: "f04debc34cbc48a4".to_string(),
-            server_name: "google.com".to_string(),
-            spider_x: "/".to_string(),
-        });
-        p.transport_type = Some(TransportType::Grpc);
-        p.fingerprint = Some("chrome".to_string());
+        if let ProtocolConfig::Vless(ref mut cfg) = p.config {
+            cfg.security = Some(crate::config::profile::Security::Reality);
+            cfg.reality = Some(RealitySettings {
+                public_key: "0IO3LodsrMnhOWh4ogwgdVqYg30CS5-snhFMwldOuAQ".to_string(),
+                short_id: "f04debc34cbc48a4".to_string(),
+                server_name: "google.com".to_string(),
+                spider_x: "/".to_string(),
+            });
+            cfg.transport_type = Some(TransportType::Grpc);
+            cfg.fingerprint = Some("chrome".to_string());
+        }
         p
+    }
+
+    fn vless_cfg_mut(profile: &mut Profile) -> &mut VlessConfig {
+        match &mut profile.config {
+            ProtocolConfig::Vless(c) => c,
+            _ => panic!("expected VLESS"),
+        }
+    }
+
+    fn vless_cfg(profile: &Profile) -> &VlessConfig {
+        match &profile.config {
+            ProtocolConfig::Vless(c) => c,
+            _ => panic!("expected VLESS"),
+        }
     }
 
     #[test]
@@ -564,7 +919,7 @@ mod tests {
     #[test]
     fn vless_outbound_with_reality() {
         let profile = test_profile();
-        let outbound = build_vless_outbound(&profile).unwrap();
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
 
         assert_eq!(outbound["type"], "vless");
         assert_eq!(outbound["tag"], "proxy");
@@ -587,14 +942,13 @@ mod tests {
 
     #[test]
     fn vless_outbound_without_reality() {
-        let profile = Profile::new(
+        let profile = Profile::new_vless(
             "Simple".to_string(),
-            Protocol::Vless,
             "1.2.3.4".to_string(),
             443,
             "uuid".to_string(),
         );
-        let outbound = build_vless_outbound(&profile).unwrap();
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
 
         let tls = &outbound["tls"];
         assert_eq!(tls["enabled"], true);
@@ -606,15 +960,15 @@ mod tests {
     #[test]
     fn vless_outbound_with_flow() {
         let mut profile = test_profile();
-        profile.flow = Some(crate::config::profile::Flow::XtlsRprxVision);
-        let outbound = build_vless_outbound(&profile).unwrap();
+        vless_cfg_mut(&mut profile).flow = Some(crate::config::profile::Flow::XtlsRprxVision);
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
         assert_eq!(outbound["flow"], "xtls-rprx-vision");
     }
 
     #[test]
     fn vless_outbound_with_grpc_transport() {
         let profile = test_profile();
-        let outbound = build_vless_outbound(&profile).unwrap();
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
 
         assert!(outbound.get("transport").is_some());
         let transport = &outbound["transport"];
@@ -626,17 +980,346 @@ mod tests {
     #[test]
     fn vless_outbound_with_grpc_service_name() {
         let mut profile = test_profile();
-        profile.transport_service_name = Some("my-service".to_string());
-        let outbound = build_vless_outbound(&profile).unwrap();
+        vless_cfg_mut(&mut profile).transport_service_name = Some("my-service".to_string());
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
         assert_eq!(outbound["transport"]["service_name"], "my-service");
     }
 
     #[test]
     fn vless_outbound_without_transport() {
         let mut profile = test_profile();
-        profile.transport_type = None;
-        let outbound = build_vless_outbound(&profile).unwrap();
+        vless_cfg_mut(&mut profile).transport_type = None;
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
         assert!(outbound.get("transport").is_none());
+    }
+
+    fn profile_with(config: ProtocolConfig, address: &str, port: u16) -> Profile {
+        Profile {
+            id: uuid::Uuid::nil(),
+            name: "T".into(),
+            address: address.into(),
+            port,
+            config,
+            tags: Vec::new(),
+            subscription_id: None,
+        }
+    }
+
+    fn build_one(profile: &Profile) -> Value {
+        let mut outs = build_outbound(profile).unwrap();
+        assert_eq!(outs.len(), 1, "expected a single outbound");
+        outs.remove(0)
+    }
+
+    #[test]
+    fn vmess_outbound_basic_shape() {
+        use crate::config::profile::{VmessConfig, VmessSecurity};
+        let profile = profile_with(
+            ProtocolConfig::Vmess(VmessConfig {
+                uuid: "vm-uuid".into(),
+                alter_id: 0,
+                security: VmessSecurity::Aes128Gcm,
+                ..Default::default()
+            }),
+            "1.1.1.1",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "vmess");
+        assert_eq!(outbound["uuid"], "vm-uuid");
+        assert_eq!(outbound["security"], "aes-128-gcm");
+        assert_eq!(outbound["alter_id"], 0);
+        assert_eq!(outbound["packet_encoding"], "xudp");
+        assert!(outbound.get("tls").is_some());
+        // Sing-box 1.12 forbids the legacy stream cipher.
+        assert_ne!(outbound["security"], "aes-128-cfb");
+    }
+
+    #[test]
+    fn vmess_outbound_with_ws_transport() {
+        use crate::config::profile::{TransportConfig, TransportType, VmessConfig};
+        let profile = profile_with(
+            ProtocolConfig::Vmess(VmessConfig {
+                uuid: "u".into(),
+                transport: Some(TransportConfig {
+                    kind: TransportType::Ws,
+                    path: Some("/ws".into()),
+                    host: Some("example.com".into()),
+                    service_name: None,
+                    headers: Default::default(),
+                }),
+                ..Default::default()
+            }),
+            "1.1.1.1",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["transport"]["type"], "ws");
+        assert_eq!(outbound["transport"]["path"], "/ws");
+        assert_eq!(outbound["transport"]["host"], "example.com");
+    }
+
+    #[test]
+    fn vmess_tls_emits_ech_when_enabled() {
+        use crate::config::profile::{EchSettings, TlsCommon, VmessConfig};
+        let profile = profile_with(
+            ProtocolConfig::Vmess(VmessConfig {
+                uuid: "u".into(),
+                tls: TlsCommon {
+                    ech: Some(EchSettings {
+                        enabled: true,
+                        config: vec!["base64-blob".into()],
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            "ech.example.com",
+            443,
+        );
+        let outbound = build_one(&profile);
+        let ech = &outbound["tls"]["ech"];
+        assert_eq!(ech["enabled"], true);
+        assert_eq!(ech["config"][0], "base64-blob");
+    }
+
+    #[test]
+    fn trojan_outbound_shape() {
+        use crate::config::profile::TrojanConfig;
+        let profile = profile_with(
+            ProtocolConfig::Trojan(TrojanConfig {
+                password: "secret".into(),
+                ..Default::default()
+            }),
+            "trojan.example",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "trojan");
+        assert_eq!(outbound["password"], "secret");
+        assert_eq!(outbound["tls"]["enabled"], true);
+        assert_eq!(outbound["tls"]["server_name"], "trojan.example");
+    }
+
+    #[test]
+    fn shadowsocks_outbound_uses_aead_cipher() {
+        use crate::config::profile::{ShadowsocksCipher, ShadowsocksConfig};
+        let profile = profile_with(
+            ProtocolConfig::Shadowsocks(ShadowsocksConfig {
+                method: ShadowsocksCipher::Blake3Aes256Gcm,
+                password: "ss-pass".into(),
+            }),
+            "ss.example",
+            8388,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "shadowsocks");
+        assert_eq!(outbound["method"], "2022-blake3-aes-256-gcm");
+        assert_eq!(outbound["password"], "ss-pass");
+        assert!(
+            outbound.get("tls").is_none(),
+            "Shadowsocks must not carry a tls block"
+        );
+    }
+
+    #[test]
+    fn hysteria2_outbound_shape() {
+        use crate::config::profile::{Hysteria2Config, Hysteria2Obfs, Hysteria2ObfsType};
+        let profile = profile_with(
+            ProtocolConfig::Hysteria2(Hysteria2Config {
+                password: "hy2-pass".into(),
+                up_mbps: Some(100),
+                down_mbps: Some(200),
+                obfs: Some(Hysteria2Obfs {
+                    kind: Hysteria2ObfsType::Salamander,
+                    password: "obfs-pass".into(),
+                }),
+                ..Default::default()
+            }),
+            "hy2.example",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "hysteria2");
+        assert_eq!(outbound["password"], "hy2-pass");
+        assert_eq!(outbound["up_mbps"], 100);
+        assert_eq!(outbound["down_mbps"], 200);
+        assert_eq!(outbound["obfs"]["type"], "salamander");
+        assert_eq!(outbound["obfs"]["password"], "obfs-pass");
+        // The legacy top-level obfs_password key must not appear.
+        assert!(outbound.get("obfs_password").is_none());
+        // Hysteria2 is QUIC-based — ALPN defaults to h3 when not set.
+        assert_eq!(outbound["tls"]["alpn"][0], "h3");
+    }
+
+    #[test]
+    fn tuic_outbound_shape() {
+        use crate::config::profile::{TuicConfig, TuicCongestion, TuicUdpRelayMode};
+        let profile = profile_with(
+            ProtocolConfig::Tuic(TuicConfig {
+                uuid: "tuic-uuid".into(),
+                password: "tuic-pass".into(),
+                congestion_control: TuicCongestion::Bbr,
+                udp_relay_mode: TuicUdpRelayMode::Native,
+                zero_rtt_handshake: true,
+                ..Default::default()
+            }),
+            "tuic.example",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "tuic");
+        assert_eq!(outbound["uuid"], "tuic-uuid");
+        assert_eq!(outbound["password"], "tuic-pass");
+        assert_eq!(outbound["congestion_control"], "bbr");
+        assert_eq!(outbound["udp_relay_mode"], "native");
+        assert_eq!(outbound["zero_rtt_handshake"], true);
+        assert_eq!(outbound["tls"]["alpn"][0], "h3");
+    }
+
+    #[test]
+    fn shadowtls_emits_wrapper_and_detour_pair() {
+        use crate::config::profile::{ShadowsocksCipher, ShadowtlsConfig};
+        let profile = profile_with(
+            ProtocolConfig::Shadowtls(ShadowtlsConfig {
+                version: ShadowtlsVersion::V3,
+                password: "st-pass".into(),
+                method: ShadowsocksCipher::Chacha20IetfPoly1305,
+                ss_password: "inner-ss".into(),
+                ..Default::default()
+            }),
+            "st.example",
+            443,
+        );
+        let outs = build_outbound(&profile).unwrap();
+        assert_eq!(outs.len(), 2, "ShadowTLS emits wrapper + detour");
+        let wrap = outs.iter().find(|o| o["type"] == "shadowtls").unwrap();
+        let inner = outs.iter().find(|o| o["type"] == "shadowsocks").unwrap();
+        assert_eq!(wrap["version"], 3);
+        assert_eq!(wrap["password"], "st-pass");
+        assert_eq!(inner["tag"], "proxy");
+        assert_eq!(inner["server"], "st.example");
+        assert_eq!(inner["server_port"], 443);
+        assert_eq!(inner["password"], "inner-ss");
+        assert_eq!(inner["detour"], wrap["tag"]);
+    }
+
+    #[test]
+    fn shadowtls_v1_omits_password() {
+        use crate::config::profile::{ShadowsocksCipher, ShadowtlsConfig};
+        let profile = profile_with(
+            ProtocolConfig::Shadowtls(ShadowtlsConfig {
+                version: ShadowtlsVersion::V1,
+                password: "ignored".into(),
+                method: ShadowsocksCipher::Chacha20IetfPoly1305,
+                ss_password: "inner-ss".into(),
+                ..Default::default()
+            }),
+            "st.example",
+            443,
+        );
+        let outs = build_outbound(&profile).unwrap();
+        let wrap = outs.iter().find(|o| o["type"] == "shadowtls").unwrap();
+        assert_eq!(wrap["version"], 1);
+        assert!(wrap.get("password").is_none(), "v1 must not emit password");
+    }
+
+    #[test]
+    fn anytls_outbound_shape() {
+        use crate::config::profile::AnytlsConfig;
+        let profile = profile_with(
+            ProtocolConfig::Anytls(AnytlsConfig {
+                password: "anytls-pass".into(),
+                idle_session_timeout: Some("30s".into()),
+                ..Default::default()
+            }),
+            "anytls.example",
+            443,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "anytls");
+        assert_eq!(outbound["password"], "anytls-pass");
+        assert_eq!(outbound["idle_session_timeout"], "30s");
+        assert_eq!(outbound["tls"]["enabled"], true);
+    }
+
+    #[test]
+    fn socks_outbound_with_auth() {
+        use crate::config::profile::{SocksConfig, SocksVersion};
+        let profile = profile_with(
+            ProtocolConfig::Socks(SocksConfig {
+                version: SocksVersion::V5,
+                username: Some("u".into()),
+                password: Some("p".into()),
+            }),
+            "socks.example",
+            1080,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "socks");
+        assert_eq!(outbound["version"], "5");
+        assert_eq!(outbound["username"], "u");
+        assert_eq!(outbound["password"], "p");
+        assert!(outbound.get("tls").is_none());
+    }
+
+    #[test]
+    fn http_outbound_emits_tls_only_when_user_opts_in() {
+        use crate::config::profile::{HttpConfig, TlsCommon};
+        let plain = profile_with(
+            ProtocolConfig::Http(HttpConfig::default()),
+            "http.example",
+            8080,
+        );
+        let plain_out = build_one(&plain);
+        assert!(plain_out.get("tls").is_none(), "plain HTTP omits TLS");
+
+        let secure = profile_with(
+            ProtocolConfig::Http(HttpConfig {
+                tls: TlsCommon {
+                    server_name: Some("proxy.example".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            "http.example",
+            8443,
+        );
+        let secure_out = build_one(&secure);
+        assert_eq!(secure_out["tls"]["enabled"], true);
+        assert_eq!(secure_out["tls"]["server_name"], "proxy.example");
+    }
+
+    #[test]
+    fn ssh_outbound_password_and_key() {
+        use crate::config::profile::SshConfig;
+        let profile = profile_with(
+            ProtocolConfig::Ssh(SshConfig {
+                user: "alice".into(),
+                password: Some("p".into()),
+                private_key_path: Some("/keys/id_ed25519".into()),
+                host_key_algorithms: vec!["ssh-ed25519".into()],
+                ..Default::default()
+            }),
+            "ssh.example",
+            22,
+        );
+        let outbound = build_one(&profile);
+        assert_eq!(outbound["type"], "ssh");
+        assert_eq!(outbound["user"], "alice");
+        assert_eq!(outbound["password"], "p");
+        assert_eq!(outbound["private_key_path"], "/keys/id_ed25519");
+        assert_eq!(outbound["host_key_algorithms"][0], "ssh-ed25519");
+    }
+
+    #[test]
+    fn generated_config_includes_direct_outbound() {
+        let profile = test_profile();
+        let settings = Settings::default();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        let outbounds = config["outbounds"].as_array().unwrap();
+        assert!(outbounds.iter().any(|o| o["type"] == "direct"));
+        assert!(outbounds.iter().any(|o| o["tag"] == "proxy"));
     }
 
     fn dns_default() -> DnsConfig {

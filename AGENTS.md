@@ -30,7 +30,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `ui` | `src/ui.rs`, `src/ui/layout.rs`, `src/ui/widgets.rs`, `src/ui/styles.rs`, `src/ui/nav.rs` | ratatui rendering (used by TUI client only), layout splits, widget definitions, color theme, navigation helpers |
 | `config` | `src/config.rs`, `src/config/profile.rs` | JSON config I/O, profile and subscription struct definitions |
 | `singbox` | `src/singbox.rs`, `src/singbox/config.rs`, `src/singbox/runner.rs` | Process lifecycle: write temp config, run `sing-box check`, spawn `sing-box run`, kill on disconnect |
-| `clipboard` | `src/infra/clipboard.rs` | Wayland clipboard integration (`wl-paste`), VLESS share link parsing (`vless://`) |
+| `clipboard` | `src/infra/clipboard.rs` | Wayland clipboard integration (`wl-paste`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
 | `geo` | `src/infra/geo.rs` | Download and cache geoip/geosite rule-sets for sing-box routing |
 | `editor` | `src/infra/editor.rs` | Launch `$EDITOR` / `$VISUAL` on `profiles.json`, temporarily restore terminal |
 | `paths` | `src/infra/paths.rs` | XDG directory resolution (`~/.config/kvn-tui/`), atomic path construction |
@@ -102,6 +102,9 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 ### Serialization
 - All persistent data uses `serde` + `serde_json`.
 - Config file: `profiles.json` (top-level `Config` struct with `profiles: Vec<Profile>` and `settings: Settings`).
+- `Profile` stores common fields (`id`, `name`, `address`, `port`) plus `#[serde(flatten)] config: ProtocolConfig`. `ProtocolConfig` is an internally-tagged enum (`#[serde(tag = "protocol", rename_all = "lowercase")]`) with one variant per protocol (11 total). VLESS keeps its protocol-specific fields flat on `VlessConfig` for backward compatibility with configs written before the multi-protocol refactor.
+- Shared TLS/transport types: `TlsCommon` (SNI, ALPN, fingerprint, insecure, `EchSettings`, `RealitySettings`), `TransportConfig` (WebSocket, gRPC, HTTP upgrade). ECH and REALITY are mutually exclusive and enforced in `ProtocolConfig::validate`.
+- `Profile::dedup_key()` returns a stable string key (`"protocol:credential@host:port"`) used by the subscription importer to detect duplicate profiles across imports.
 - Enums use `#[serde(rename_all = "snake_case")]` or `"lowercase"` as appropriate.
 
 ### Formatting & Linting
@@ -157,6 +160,8 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - `singbox::config::generate_config` builds a complete sing-box 1.12+ JSON object from a `Profile` and `Settings`.
 - The config is written to a temp file (`/tmp/kvn-tui-singbox.json` or `$XDG_RUNTIME_DIR`), validated with `sing-box check`, and only then is `sing-box run` spawned.
 - If the process exits immediately, stderr is captured and surfaced to the user.
+- `build_outbound(profile)` dispatches to a per-protocol builder and returns `Vec<serde_json::Value>` (most protocols return one outbound; ShadowTLS returns two — a `shadowtls` wrapper tagged `shadowtls-wrap` plus a `shadowsocks` detour tagged `proxy`).
+- Shared helpers: `build_tls_block` (TLS + ECH + REALITY), `build_transport_block` (WebSocket / gRPC / HTTP upgrade). No deprecated sing-box fields (no `obfs_password`, no `aes-128-cfb`, no top-level `dns.fakeip`, no WireGuard outbound).
 
 ### Routing Modes
 - `RoutingMode::Global` — all traffic through VPN.
@@ -168,9 +173,17 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - Geo-region and routing-mode preferences are grouped under `settings.geo_routing: GeoRouting`. It stores `current_region: Option<GeoRegion>` and `selected_region_modes: HashMap<GeoRegion, RoutingMode>`. The active mode is derived from `selected_region_modes[current_region]` and falls back to `Global`. Switching back to a previously used region restores its last routing mode.
 - Rule-sets are local `.srs` binary files downloaded to `~/.config/kvn-tui/geo/`.
 
-### Clipboard Parsing
-- Only `vless://` URIs are supported.
-- The parser extracts: UUID, host, port, fragment (name), `flow`, `security`, `fp` (fingerprint), `type` (transport), `serviceName`, and REALITY params (`pbk`, `sid`, `sni`, `spx`).
+### Share-Link Parsing
+- Entry point: `config::profile::parse_share_link(uri)` dispatches on the URI scheme.
+- Supported schemes: `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `hy2://`, `tuic://`, `shadowtls://`, `anytls://`, `socks://`, `socks5://`, `http://`, `https://`, `ssh://`.
+- All supported schemes are listed in `SUPPORTED_SHARE_SCHEMES` (used by both dispatch and the subscription Base64 heuristic in `infra::subscription`).
+- VLESS: extracts UUID, host, port, fragment (name), `flow`, `security`, `fp`, transport type, and REALITY params (`pbk`, `sid`, `sni`, `spx`). ECH config also parsed when present.
+- VMess: handles both base64-JSON (v2rayN / Shadowrocket) and inline URI forms.
+- Shadowsocks: handles SIP002 (`ss://base64(method:password)@host:port`) and legacy fully-base64 forms.
+- Hysteria 2: `hy2://` is an alias for `hysteria2://`.
+- SOCKS: `socks5://` is an alias for `socks://`.
+- TLS parameters shared across protocols (VLESS excluded — keeps fields flat for backward compat): `TlsCommon` with SNI, ALPN, fingerprint, insecure, ECH (`EchSettings`), and REALITY (`RealitySettings`). ECH and REALITY are mutually exclusive.
+- Transport (WebSocket / gRPC / HTTP): `TransportConfig` shared across VLESS, VMess, Trojan, AnyTLS.
 
 ### Suspend / Resume
 - `services/suspend.rs` runs a blocking zbus listener in a dedicated thread. On resume (`PrepareForSleep` with `false`), it sends `Msg::SystemResumed` through the `mpsc` channel so `update.rs` can schedule a reconnect effect.

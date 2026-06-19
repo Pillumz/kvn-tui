@@ -114,7 +114,7 @@ impl<'a> Widget for StatusBar<'a> {
 mod tests {
     use super::*;
     use crate::app::model::ConnectionState;
-    use crate::config::profile::{Profile, Protocol};
+    use crate::config::profile::Profile;
     use crate::test_helpers::{buffer_to_string, model_with_profiles};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
@@ -154,9 +154,8 @@ mod tests {
 
     #[test]
     fn status_bar_connected_snapshot() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Alpha".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -170,9 +169,8 @@ mod tests {
 
     #[test]
     fn status_bar_connected_auto_snapshot() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Alpha".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),

@@ -301,14 +301,13 @@ mod tests {
 
     #[test]
     fn find_profile_line_first_profile() {
-        use crate::config::profile::{Profile, Protocol};
+        use crate::config::profile::Profile;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("profiles.json");
 
         let mut config = Config::default();
-        config.profiles.push(Profile::new(
+        config.profiles.push(Profile::new_vless(
             "First".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -329,21 +328,19 @@ mod tests {
 
     #[test]
     fn find_profile_line_second_profile() {
-        use crate::config::profile::{Profile, Protocol};
+        use crate::config::profile::Profile;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("profiles.json");
 
         let mut config = Config::default();
-        config.profiles.push(Profile::new(
+        config.profiles.push(Profile::new_vless(
             "First".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
         ));
-        config.profiles.push(Profile::new(
+        config.profiles.push(Profile::new_vless(
             "Second".to_string(),
-            Protocol::Vless,
             "2.2.2.2".to_string(),
             443,
             "u2".to_string(),
@@ -364,14 +361,13 @@ mod tests {
 
     #[test]
     fn find_profile_line_out_of_bounds() {
-        use crate::config::profile::{Profile, Protocol};
+        use crate::config::profile::Profile;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("profiles.json");
 
         let mut config = Config::default();
-        config.profiles.push(Profile::new(
+        config.profiles.push(Profile::new_vless(
             "Only".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),

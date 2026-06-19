@@ -422,9 +422,10 @@ impl Model {
         self.selected = row_for_profile(&self.config, self.config.profiles.len() - 1);
     }
 
-    /// Check whether a profile with the same UUID already exists.
+    /// Check whether a profile with the same credentials already exists.
     pub fn has_duplicate(&self, profile: &Profile) -> bool {
-        self.config.profiles.iter().any(|p| p.uuid == profile.uuid)
+        let key = profile.dedup_key();
+        self.config.profiles.iter().any(|p| p.dedup_key() == key)
     }
 }
 
@@ -460,7 +461,6 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::Protocol;
     use crate::test_helpers::*;
 
     #[test]
@@ -535,9 +535,8 @@ mod tests {
 
     #[test]
     fn delete_selected_only_item() {
-        let mut model = model_with_profiles(vec![Profile::new(
+        let mut model = model_with_profiles(vec![Profile::new_vless(
             "Only".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u".to_string(),
@@ -551,9 +550,8 @@ mod tests {
     #[test]
     fn add_profile_updates_state() {
         let mut model = model_with_profiles(sample_profiles());
-        let p = Profile::new(
+        let p = Profile::new_vless(
             "D".to_string(),
-            Protocol::Vless,
             "4.4.4.4".to_string(),
             443,
             "u4".to_string(),
@@ -588,9 +586,8 @@ mod tests {
     #[test]
     fn resolve_startup_state_auto_connect() {
         let mut config = Config::default();
-        let profile = Profile::new(
+        let profile = Profile::new_vless(
             "Auto".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -611,9 +608,8 @@ mod tests {
         let mut config = Config::default();
         config.settings.auto_connect = true;
         config.settings.last_connected_profile = Some(Uuid::new_v4());
-        config.profiles.push(Profile::new(
+        config.profiles.push(Profile::new_vless(
             "A".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -641,9 +637,8 @@ mod tests {
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
 
         let mut config = Config::default();
-        let profile = Profile::new(
+        let profile = Profile::new_vless(
             "Auto".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),
@@ -667,9 +662,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
 
-        let model = model_with_profiles(vec![Profile::new(
+        let model = model_with_profiles(vec![Profile::new_vless(
             "Alpha".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u1".to_string(),

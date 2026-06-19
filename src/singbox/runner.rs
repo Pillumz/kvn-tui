@@ -124,7 +124,7 @@ pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::{Profile, Protocol};
+    use crate::config::profile::Profile;
 
     #[test]
     fn singbox_binary_resolution() {
@@ -140,9 +140,8 @@ mod tests {
 
     #[test]
     fn write_config_creates_valid_json() {
-        let profile = Profile::new(
+        let profile = Profile::new_vless(
             "Test".to_string(),
-            Protocol::Vless,
             "1.2.3.4".to_string(),
             443,
             "uuid".to_string(),

@@ -239,12 +239,11 @@ mod tests {
     #[test]
     fn build_state_connected() {
         use crate::app::model::{ConnectionState, Model};
-        use crate::config::profile::{Config, Profile, Protocol};
+        use crate::config::profile::{Config, Profile};
         let mut model = Model::test_new(Config::default());
         model.connection = ConnectionState::Connected;
-        let profile = Profile::new(
+        let profile = Profile::new_vless(
             "Test".to_string(),
-            Protocol::Vless,
             "1.1.1.1".to_string(),
             443,
             "u".to_string(),
