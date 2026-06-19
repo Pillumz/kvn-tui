@@ -60,7 +60,6 @@ fn run_loop(
                     | Effect::DownloadGeo
                     | Effect::WriteState
                     | Effect::SaveConfig
-                    | Effect::PasteClipboard
                     | Effect::UpdateSubscription { .. }
                     | Effect::BroadcastState
                     | Effect::ApplyKillSwitch { .. }
@@ -214,10 +213,6 @@ fn execute_daemon_effect(
                 model.set_status(AppStatus::Error(format!("Failed to save config: {}", e)));
             }
         }
-        Effect::PasteClipboard => {
-            // In daemon mode paste is handled via IpcCommand::Paste directly;
-            // this variant should not normally reach the daemon.
-        }
         Effect::UpdateSubscription { id } => {
             if let Some(sub) = model.config.subscriptions.iter().find(|s| s.id == id) {
                 let url = sub.url.clone();
@@ -232,9 +227,6 @@ fn execute_daemon_effect(
         Effect::BroadcastState => {}
         Effect::Quit => {
             model.should_quit = true;
-        }
-        Effect::OpenEditor(_) => {
-            // Editor is a TUI-local operation; daemon ignores it.
         }
         Effect::AppendAppLog { level, message } => {
             crate::services::log_tailer::append_app_log(&level, &message);

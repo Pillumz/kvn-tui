@@ -40,9 +40,10 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('g') => model.select_first(),
         KeyCode::Char('G') => model.select_last(),
 
-        // Actions
+        // Actions. Note: 'p' (paste) and 'e' (edit profiles) are handled in
+        // the TUI client directly, not routed through the daemon, so they
+        // don't appear here.
         KeyCode::Enter => return handle_enter_on_sources(model),
-        KeyCode::Char('p') => return vec![Effect::PasteClipboard],
         KeyCode::Char('d')
             if model.selected_profile().is_some() || model.selected_subscription().is_some() =>
         {
@@ -86,11 +87,6 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Some(GeoRegion::Global) => 3,
                 None => 0,
             };
-        }
-        KeyCode::Char('e') => {
-            return vec![Effect::OpenEditor(
-                model.selected_profile_index().unwrap_or(0),
-            )];
         }
         KeyCode::Char('r') if model.connection == ConnectionState::Connected => {
             if let Some(profile) = model.selected_profile() {

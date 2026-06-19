@@ -14,8 +14,6 @@ pub enum Effect {
     RefreshGeoLastUpdated,
     WriteState,
     SaveConfig,
-    OpenEditor(usize),
-    PasteClipboard,
     UpdateSubscription {
         id: Uuid,
     },
