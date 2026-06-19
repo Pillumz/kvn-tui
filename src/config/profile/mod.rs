@@ -942,16 +942,42 @@ impl Default for Settings {
     }
 }
 
+/// Current schema version for `profiles.json`. Bumped on every breaking
+/// change to the persisted shape; new migrations go in `Config::migrate`.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    // Files written before the version was introduced are treated as v0
+    // and run through the v0 → v1 migration on load.
+    0
+}
+
 /// Root configuration file structure.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Schema version of the persisted file. See [`CURRENT_SCHEMA_VERSION`].
+    /// Absent in pre-versioned files; defaults to 0 in that case so the load
+    /// path runs the v0 → v1 migration.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     #[serde(default)]
     pub profiles: Vec<Profile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subscriptions: Vec<Subscription>,
     #[serde(default)]
     pub settings: Settings,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            profiles: Vec::new(),
+            subscriptions: Vec::new(),
+            settings: Settings::default(),
+        }
+    }
 }
 
 impl Config {
@@ -997,9 +1023,20 @@ impl Config {
         Ok(())
     }
 
-    /// Promote the legacy `Settings.dns_strategy` field into `Settings.dns.strategy`
-    /// when the latter is at its default and the former is not. Idempotent.
-    pub fn migrate_legacy_dns_strategy(&mut self) {
+    /// Apply schema migrations needed to bring the loaded config up to
+    /// [`CURRENT_SCHEMA_VERSION`]. Called by `load_config_at` after deserialise.
+    /// Each migration step is idempotent.
+    pub fn migrate(&mut self) {
+        if self.schema_version == 0 {
+            self.migrate_v0_to_v1();
+            self.schema_version = 1;
+        }
+        debug_assert_eq!(self.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// v0 → v1: promote the legacy `Settings.dns_strategy` field into
+    /// `Settings.dns.strategy`. Idempotent.
+    fn migrate_v0_to_v1(&mut self) {
         if self.settings.dns.strategy == DnsStrategy::default()
             && self.settings.dns_strategy != DnsStrategy::default()
         {
@@ -1565,7 +1602,7 @@ mod tests {
         assert_eq!(p.port, 443);
         assert_eq!(p.name, "VMess-1");
         let ProtocolConfig::Vmess(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.uuid, "vm-uuid");
         assert_eq!(cfg.tls.server_name.as_deref(), Some("sni.example"));
@@ -1591,7 +1628,7 @@ mod tests {
         assert_eq!(p.address, "1.2.3.4");
         assert_eq!(p.port, 10086);
         let ProtocolConfig::Vmess(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.uuid, "vm-id");
         assert_eq!(cfg.security, VmessSecurity::Aes128Gcm);
@@ -1611,7 +1648,7 @@ mod tests {
         let p = parse_share_link(uri).unwrap();
         assert_eq!(p.protocol(), Protocol::Trojan);
         let ProtocolConfig::Trojan(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.password, "secret");
         assert_eq!(cfg.tls.server_name.as_deref(), Some("sni.example"));
@@ -1623,7 +1660,7 @@ mod tests {
         let uri = "trojan://hello%20world@trojan.example:443#T";
         let p = parse_share_link(uri).unwrap();
         let ProtocolConfig::Trojan(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.password, "hello world");
     }
@@ -1638,7 +1675,7 @@ mod tests {
         let p = parse_share_link(&uri).unwrap();
         assert_eq!(p.protocol(), Protocol::Shadowsocks);
         let ProtocolConfig::Shadowsocks(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.method, ShadowsocksCipher::Aes256Gcm);
         assert_eq!(cfg.password, "ssecret");
@@ -1655,7 +1692,7 @@ mod tests {
         let uri = format!("ss://{}#Legacy", blob);
         let p = parse_share_link(&uri).unwrap();
         let ProtocolConfig::Shadowsocks(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.method, ShadowsocksCipher::Chacha20IetfPoly1305);
         assert_eq!(cfg.password, "pw");
@@ -1680,7 +1717,7 @@ mod tests {
         let p = parse_share_link(uri).unwrap();
         assert_eq!(p.protocol(), Protocol::Hysteria2);
         let ProtocolConfig::Hysteria2(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.password, "hp");
         let obfs = cfg.obfs.as_ref().unwrap();
@@ -1699,7 +1736,7 @@ mod tests {
         let p = parse_share_link(uri).unwrap();
         assert_eq!(p.protocol(), Protocol::Tuic);
         let ProtocolConfig::Tuic(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.uuid, "tu-uuid");
         assert_eq!(cfg.password, "tp");
@@ -1716,7 +1753,7 @@ mod tests {
         let p = parse_share_link("socks5://u:p@s.example:1080#S5").unwrap();
         assert_eq!(p.protocol(), Protocol::Socks);
         let ProtocolConfig::Socks(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.version, SocksVersion::V5);
         assert_eq!(cfg.username.as_deref(), Some("u"));
@@ -1727,14 +1764,14 @@ mod tests {
     fn parse_https_enables_tls() {
         let plain = parse_share_link("http://h.example:8080#HTTP").unwrap();
         let ProtocolConfig::Http(cfg) = &plain.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert!(!tls_has_anything(&cfg.tls));
 
         let secure = parse_share_link("https://u:p@h.example#HTTPS").unwrap();
         assert_eq!(secure.port, 443);
         let ProtocolConfig::Http(cfg) = &secure.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert!(cfg.tls.server_name.is_some());
         assert_eq!(cfg.username.as_deref(), Some("u"));
@@ -1754,7 +1791,7 @@ mod tests {
     fn parse_ssh_with_password_in_query() {
         let p = parse_share_link("ssh://alice@ssh.example:2222?password=p#SSH").unwrap();
         let ProtocolConfig::Ssh(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.user, "alice");
         assert_eq!(cfg.password.as_deref(), Some("p"));
@@ -1765,7 +1802,7 @@ mod tests {
     fn parse_anytls_basic() {
         let p = parse_share_link("anytls://pp@a.example:443?sni=sni.example#A").unwrap();
         let ProtocolConfig::Anytls(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.password, "pp");
         assert_eq!(cfg.tls.server_name.as_deref(), Some("sni.example"));
@@ -1776,7 +1813,7 @@ mod tests {
         let uri = "shadowtls://stp@st.example:443?version=3&ss-method=2022-blake3-aes-256-gcm&ss-password=isp&sni=sni.example#ST";
         let p = parse_share_link(uri).unwrap();
         let ProtocolConfig::Shadowtls(cfg) = &p.config else {
-            panic!()
+            panic!("ProtocolConfig variant mismatch")
         };
         assert_eq!(cfg.version, ShadowtlsVersion::V3);
         assert_eq!(cfg.password, "stp");

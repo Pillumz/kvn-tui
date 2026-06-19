@@ -97,34 +97,42 @@ pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
         .spawn()
         .with_context(|| format!("Failed to start sing-box (binary: {})", singbox_binary()))?;
 
-    // Give sing-box a moment to either start or fail immediately.
-    thread::sleep(Duration::from_millis(300));
-
-    // Check if process exited immediately with an error.
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            let mut stderr = String::new();
-            if let Some(ref mut err) = child.stderr {
-                if let Err(e) = err.read_to_string(&mut stderr) {
-                    tracing::warn!("Failed to read sing-box stderr: {}", e);
+    // Poll for either an immediate exit (config rejected, port busy, etc.)
+    // or a stable run. The 300ms budget is the same heuristic as before —
+    // sing-box that survives this window is considered up — but we now
+    // detect an early failure within ~10ms instead of always waiting the
+    // full window.
+    let deadline = std::time::Instant::now() + Duration::from_millis(300);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stderr = String::new();
+                if let Some(ref mut err) = child.stderr {
+                    if let Err(e) = err.read_to_string(&mut stderr) {
+                        tracing::warn!("Failed to read sing-box stderr: {}", e);
+                    }
                 }
+                anyhow::bail!(
+                    "sing-box exited immediately (code: {:?}). stderr: {}",
+                    status.code(),
+                    stderr.trim()
+                );
             }
-            anyhow::bail!(
-                "sing-box exited immediately (code: {:?}). stderr: {}",
-                status.code(),
-                stderr.trim()
-            );
-        }
-        Ok(None) => {
-            // Process is still running — drain stderr so the child doesn't
-            // block on a full pipe buffer, then hand the child off.
-            if let Some(stderr) = child.stderr.take() {
-                spawn_stderr_drain(stderr);
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Process survived the readiness window — drain stderr so
+                    // the child doesn't block on a full pipe buffer, then hand
+                    // the child off.
+                    if let Some(stderr) = child.stderr.take() {
+                        spawn_stderr_drain(stderr);
+                    }
+                    return Ok(ProcessHandle::new(child));
+                }
+                thread::sleep(Duration::from_millis(10));
             }
-            Ok(ProcessHandle::new(child))
-        }
-        Err(e) => {
-            anyhow::bail!("Failed to check sing-box status: {}", e);
+            Err(e) => {
+                anyhow::bail!("Failed to check sing-box status: {}", e);
+            }
         }
     }
 }
@@ -151,6 +159,7 @@ mod tests {
 
     #[test]
     fn singbox_binary_resolution() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         // Default (no env override)
         unsafe { std::env::remove_var("SING_BOX_PATH") };
         assert_eq!(resolve_singbox_binary(), "sing-box");
