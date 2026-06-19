@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::config::profile::{Config, DnsStrategy, GeoRegion, Profile};
@@ -65,6 +66,27 @@ pub struct AppState {
     pub profile_name: Option<String>,
     pub active_profile_id: Option<String>,
     pub singbox_pid: Option<u32>,
+}
+
+/// Live traffic statistics scraped from sing-box's Clash API. Default values
+/// (all zeros) mean "no data yet" and the status bar segment is hidden.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrafficStats {
+    /// Instantaneous upload rate in bytes per second.
+    #[serde(default)]
+    pub up_rate_bps: u64,
+    /// Instantaneous download rate in bytes per second.
+    #[serde(default)]
+    pub down_rate_bps: u64,
+    /// Cumulative upload bytes since sing-box started.
+    #[serde(default)]
+    pub up_total: u64,
+    /// Cumulative download bytes since sing-box started.
+    #[serde(default)]
+    pub down_total: u64,
+    /// Number of currently active connections proxied by sing-box.
+    #[serde(default)]
+    pub conn_count: usize,
 }
 
 /// Maximum number of log lines kept in the UI buffer.
@@ -137,6 +159,17 @@ pub struct Model {
     pub needs_redraw: bool,
     pub should_quit: bool,
     pub geo_last_updated: Option<String>,
+    /// Latest traffic stats sample, applied either by the daemon (after a
+    /// Clash-API fetch) or by the TUI client (from a `StateSnapshot`).
+    pub traffic: TrafficStats,
+    /// Wall-clock time of the previous traffic sample, in ms since Unix
+    /// epoch. Used by the pure reducer to compute rate deltas. Set to 0
+    /// when there is no prior sample.
+    pub last_traffic_sample_at_ms: u64,
+    /// When the daemon last issued an `Effect::FetchTrafficStats`. Used by
+    /// `handle_tick` to throttle Clash-API polling to ~1 Hz. Not serialized —
+    /// clients don't need it.
+    pub last_traffic_fetch_at: Option<Instant>,
 }
 
 impl Model {
@@ -225,6 +258,9 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
+            traffic: TrafficStats::default(),
+            last_traffic_sample_at_ms: 0,
+            last_traffic_fetch_at: None,
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -270,6 +306,9 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
+            traffic: TrafficStats::default(),
+            last_traffic_sample_at_ms: 0,
+            last_traffic_fetch_at: None,
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -454,6 +493,9 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated: None,
+            traffic: TrafficStats::default(),
+            last_traffic_sample_at_ms: 0,
+            last_traffic_fetch_at: None,
         }
     }
 }

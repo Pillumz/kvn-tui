@@ -78,7 +78,10 @@ pub fn generate_config(
         "outbounds": proxy_outbounds,
         "route": route,
         "experimental": {
-            "cache_file": cache_file
+            "cache_file": cache_file,
+            "clash_api": {
+                "external_controller": "127.0.0.1:9090"
+            }
         }
     });
 
@@ -890,6 +893,17 @@ mod tests {
         assert!(config.get("outbounds").is_some());
         assert!(config.get("route").is_some());
         assert!(config.get("experimental").is_some());
+    }
+
+    #[test]
+    fn generated_config_enables_clash_api() {
+        let profile = test_profile();
+        let settings = Settings::default();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        assert_eq!(
+            config["experimental"]["clash_api"]["external_controller"], "127.0.0.1:9090",
+            "clash_api must be enabled so the TUI can poll traffic stats"
+        );
     }
 
     #[test]

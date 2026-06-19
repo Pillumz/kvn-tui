@@ -202,6 +202,7 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.config.profiles = snapshot.profiles;
     model.config.subscriptions = snapshot.subscriptions;
     model.config.settings = snapshot.settings;
+    model.traffic = snapshot.traffic;
 }
 
 fn spawn_event_reader(tx: Sender<Msg>, reading_enabled: Arc<AtomicBool>) {

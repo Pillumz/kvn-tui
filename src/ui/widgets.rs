@@ -18,6 +18,42 @@ impl<'a> StatusBar<'a> {
     }
 }
 
+/// Render a bytes-per-second rate as a short human-readable string.
+/// Uses 1024-based units (KiB-style) to match typical bandwidth-monitor
+/// conventions. Examples: `0 → "0 B/s"`, `1024 → "1.0 KB/s"`,
+/// `1_500_000 → "1.4 MB/s"`.
+pub fn format_bps(bps: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bps >= GB {
+        format!("{:.1} GB/s", bps as f64 / GB as f64)
+    } else if bps >= MB {
+        format!("{:.1} MB/s", bps as f64 / MB as f64)
+    } else if bps >= KB {
+        format!("{:.1} KB/s", bps as f64 / KB as f64)
+    } else {
+        format!("{} B/s", bps)
+    }
+}
+
+/// Render a cumulative byte count as a short human-readable string (no `/s`
+/// suffix). 1024-based units. Examples: `0 → "0 B"`, `1_500_000 → "1.4 MB"`.
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 /// Truncate a string to fit within a visual width, appending "..." if truncated.
 fn truncate_to_width(s: &str, max_width: usize) -> String {
     if max_width <= 3 {
@@ -207,6 +243,25 @@ mod tests {
         assert!(content.contains("[DISCONNECTED]"));
         assert!(content.contains("[Global]"));
         assert!(!content.contains("[Geo:"));
+    }
+
+    #[test]
+    fn format_bps_boundaries() {
+        assert_eq!(format_bps(0), "0 B/s");
+        assert_eq!(format_bps(1023), "1023 B/s");
+        assert_eq!(format_bps(1024), "1.0 KB/s");
+        assert_eq!(format_bps(1500), "1.5 KB/s");
+        assert_eq!(format_bps(1_500_000), "1.4 MB/s");
+        assert_eq!(format_bps(2 * 1024 * 1024 * 1024), "2.0 GB/s");
+    }
+
+    #[test]
+    fn format_bytes_boundaries() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1_500_000), "1.4 MB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
     }
 
     #[test]

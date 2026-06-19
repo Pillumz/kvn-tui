@@ -1,3 +1,4 @@
+pub mod clash_api;
 pub mod clipboard;
 pub mod editor;
 pub mod geo;

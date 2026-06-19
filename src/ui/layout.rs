@@ -5,22 +5,45 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, Wrap};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::model::{Model, Overlay, SourceRow};
+use crate::app::model::{ConnectionState, Model, Overlay, SourceRow};
 use crate::ui::styles::Theme;
-use crate::ui::widgets::StatusBar;
+use crate::ui::widgets::{StatusBar, format_bps, format_bytes};
+
+/// Height (including borders) of the full-width traffic header rendered at
+/// the very top of the UI when the VPN is connected. One content row plus
+/// top/bottom borders = 3 lines.
+const TRAFFIC_PANEL_HEIGHT: u16 = 3;
 
 /// Render the full application UI into the terminal frame.
 pub fn draw(frame: &mut Frame, model: &Model) {
     let area = frame.area();
 
-    // Main vertical layout: content + status bar
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
-        .split(area);
+    // Top-level vertical layout: optional traffic header, main content, status bar.
+    let show_traffic =
+        model.connection == ConnectionState::Connected && area.height > TRAFFIC_PANEL_HEIGHT + 5;
+    let (traffic_area, main_area, status_area) = if show_traffic {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(TRAFFIC_PANEL_HEIGHT),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        (Some(split[0]), split[1], split[2])
+    } else {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(area);
+        (None, split[0], split[1])
+    };
 
-    draw_main(frame, model, chunks[0]);
-    draw_status_bar(frame, model, chunks[1]);
+    if let Some(area) = traffic_area {
+        draw_traffic_panel(frame, model, area);
+    }
+    draw_main(frame, model, main_area);
+    draw_status_bar(frame, model, status_area);
 
     match model.overlay {
         Overlay::Help => draw_help(frame, area),
@@ -68,6 +91,37 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
         .block(log_block)
         .wrap(Wrap { trim: true });
     frame.render_widget(logs, content_chunks[1]);
+}
+
+/// Render the full-width traffic header: instantaneous ↑/↓ rate, cumulative
+/// totals, and active connection count laid out on a single content row
+/// inside a bordered block. Driven by `model.traffic`, updated ~1 Hz by the
+/// daemon.
+fn draw_traffic_panel(frame: &mut Frame, model: &Model, area: Rect) {
+    let t = &model.traffic;
+    let line = Line::from(vec![
+        Span::styled("↑ ", Theme::success()),
+        Span::styled(format_bps(t.up_rate_bps), Theme::normal()),
+        Span::raw("   "),
+        Span::styled("↓ ", Theme::accent()),
+        Span::styled(format_bps(t.down_rate_bps), Theme::normal()),
+        Span::raw("     "),
+        Span::styled("Total ", Theme::border()),
+        Span::styled("↑ ", Theme::success()),
+        Span::styled(format_bytes(t.up_total), Theme::normal()),
+        Span::raw("   "),
+        Span::styled("↓ ", Theme::accent()),
+        Span::styled(format_bytes(t.down_total), Theme::normal()),
+        Span::raw("     "),
+        Span::styled(format!("{}", t.conn_count), Theme::accent()),
+        Span::styled(" connections", Theme::normal()),
+    ]);
+    let block = Block::default()
+        .title(" Traffic ")
+        .borders(Borders::ALL)
+        .border_style(Theme::border());
+    let paragraph = Paragraph::new(line).block(block);
+    frame.render_widget(paragraph, area);
 }
 
 /// Draw the bottom status bar.
@@ -774,6 +828,51 @@ mod tests {
         model.connection = ConnectionState::Connected;
         model.active_profile_id = Some(model.config.profiles[0].id);
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    #[test]
+    fn draw_traffic_panel_snapshot() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[0].id);
+        model.traffic = crate::app::model::TrafficStats {
+            up_rate_bps: 12_345,
+            down_rate_bps: 3_500_000,
+            up_total: 142 * 1024 * 1024,
+            down_total: 3 * 1024 * 1024 * 1024,
+            conn_count: 18,
+        };
+        insta::assert_snapshot!(snapshot_terminal(&model, 100, 20));
+    }
+
+    #[test]
+    fn draw_main_hides_traffic_panel_when_idle() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        // Connection state Idle → traffic panel must not appear.
+        model.traffic = crate::app::model::TrafficStats {
+            up_rate_bps: 1000,
+            down_rate_bps: 1000,
+            up_total: 1000,
+            down_total: 1000,
+            conn_count: 4,
+        };
+        let output = snapshot_terminal(&model, 100, 20);
+        assert!(
+            !output.contains("Traffic"),
+            "traffic panel must be hidden when not connected: {}",
+            output
+        );
     }
 
     #[test]

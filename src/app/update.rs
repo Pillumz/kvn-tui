@@ -1,10 +1,15 @@
 use crate::app::effect::Effect;
-use crate::app::model::{AppStatus, ConnectionState, Model, Overlay};
+use crate::app::model::{AppStatus, ConnectionState, Model, Overlay, TrafficStats};
 use crate::app::msg::{GeoResult, Msg};
 use crate::config::profile::{GeoRegion, Profile, Subscription, SubscriptionAutoUpdate};
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+/// Minimum interval between Clash-API scrapes. The daemon ticker fires every
+/// 250 ms; we only emit `Effect::FetchTrafficStats` once per second.
+const TRAFFIC_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Pure function: Model + Msg → updated Model + list of Effects.
 /// No I/O, no threads, no system calls.
@@ -43,6 +48,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
             model.singbox_pid = Some(pid);
             model.connection = ConnectionState::Connected;
             model.overlay = Overlay::None;
+            // Fresh sing-box → fresh counters. Drop the previous sample so the
+            // first delta is computed against zero rather than a stale value.
+            model.traffic = TrafficStats::default();
+            model.last_traffic_sample_at_ms = 0;
+            model.last_traffic_fetch_at = None;
             let mut effects = vec![Effect::WriteState];
             if let Some(profile) = model.selected_profile() {
                 let profile_id = profile.id;
@@ -65,6 +75,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::ConnectFailed(err) => {
             model.connection = ConnectionState::Idle;
             model.overlay = Overlay::Error;
+            model.traffic = TrafficStats::default();
+            model.last_traffic_sample_at_ms = 0;
+            model.last_traffic_fetch_at = None;
             let mut effects = vec![Effect::BroadcastState];
             push_status(
                 &mut effects,
@@ -84,7 +97,55 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::KillSwitchApplied { enabled, error } => {
             handle_kill_switch_applied(model, enabled, error)
         }
+        Msg::TrafficStatsUpdated {
+            up_total,
+            down_total,
+            conn_count,
+            sampled_at_ms,
+        } => handle_traffic_stats_updated(model, up_total, down_total, conn_count, sampled_at_ms),
     }
+}
+
+/// Compute a per-second byte rate from two cumulative samples. Returns 0 when
+/// no time has passed, when the counter went backwards (e.g. sing-box restart
+/// reset its totals), or when there's no prior sample yet (`prev_at_ms == 0`).
+pub(crate) fn compute_rate(prev_total: u64, curr_total: u64, elapsed_ms: u64) -> u64 {
+    if elapsed_ms == 0 {
+        return 0;
+    }
+    let delta = curr_total.saturating_sub(prev_total);
+    // (delta bytes / elapsed ms) * 1000 — done in u128 to avoid overflow.
+    ((delta as u128 * 1000) / elapsed_ms as u128) as u64
+}
+
+fn handle_traffic_stats_updated(
+    model: &mut Model,
+    up_total: u64,
+    down_total: u64,
+    conn_count: usize,
+    sampled_at_ms: u64,
+) -> Vec<Effect> {
+    let prev_at_ms = model.last_traffic_sample_at_ms;
+    // No prior sample yet — record totals but leave rates at zero. The next
+    // tick produces the first instantaneous reading against this baseline.
+    let (up_rate, down_rate) = if prev_at_ms == 0 {
+        (0, 0)
+    } else {
+        let elapsed = sampled_at_ms.saturating_sub(prev_at_ms);
+        (
+            compute_rate(model.traffic.up_total, up_total, elapsed),
+            compute_rate(model.traffic.down_total, down_total, elapsed),
+        )
+    };
+    model.traffic = TrafficStats {
+        up_rate_bps: up_rate,
+        down_rate_bps: down_rate,
+        up_total,
+        down_total,
+        conn_count,
+    };
+    model.last_traffic_sample_at_ms = sampled_at_ms;
+    vec![Effect::BroadcastState]
 }
 
 fn handle_kill_switch_applied(
@@ -193,6 +254,23 @@ fn handle_tick(model: &mut Model) -> Vec<Effect> {
 
     // Auto-update subscriptions that are due.
     effects.extend(check_due_subscriptions(model));
+
+    // Throttled Clash-API poll for live traffic stats.
+    if model.connection == ConnectionState::Connected {
+        let now = Instant::now();
+        let due = match model.last_traffic_fetch_at {
+            None => true,
+            Some(prev) => now.duration_since(prev) >= TRAFFIC_POLL_INTERVAL,
+        };
+        if due {
+            model.last_traffic_fetch_at = Some(now);
+            effects.push(Effect::FetchTrafficStats {
+                prev_up_total: model.traffic.up_total,
+                prev_down_total: model.traffic.down_total,
+                prev_sampled_at_ms: model.last_traffic_sample_at_ms,
+            });
+        }
+    }
 
     effects
 }
@@ -2537,5 +2615,143 @@ mod tests {
 
         assert!(effects.is_empty());
         assert!(!model.subscription_updates.contains(&sub_id));
+    }
+
+    #[test]
+    fn compute_rate_zero_elapsed_returns_zero() {
+        assert_eq!(compute_rate(0, 1_000_000, 0), 0);
+        assert_eq!(compute_rate(100, 1_000, 0), 0);
+    }
+
+    #[test]
+    fn compute_rate_counter_rollback_saturates_to_zero() {
+        // sing-box restarted mid-session — totals reset; saturating_sub.
+        assert_eq!(compute_rate(10_000, 500, 1_000), 0);
+    }
+
+    #[test]
+    fn compute_rate_basic() {
+        // 2000 bytes delta over 1000 ms = 2000 B/s
+        assert_eq!(compute_rate(1_000, 3_000, 1_000), 2_000);
+        // 1500 bytes delta over 500 ms = 3000 B/s
+        assert_eq!(compute_rate(0, 1_500, 500), 3_000);
+    }
+
+    #[test]
+    fn compute_rate_fractional_second() {
+        // 100 bytes over 250 ms = 400 B/s
+        assert_eq!(compute_rate(0, 100, 250), 400);
+    }
+
+    #[test]
+    fn traffic_stats_updated_first_sample_records_zero_rate() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_traffic_stats_updated(&mut model, 10_000, 50_000, 3, 1_000);
+        assert_eq!(model.traffic.up_total, 10_000);
+        assert_eq!(model.traffic.down_total, 50_000);
+        assert_eq!(model.traffic.conn_count, 3);
+        // First sample → no prior baseline → rates remain zero.
+        assert_eq!(model.traffic.up_rate_bps, 0);
+        assert_eq!(model.traffic.down_rate_bps, 0);
+        assert_eq!(model.last_traffic_sample_at_ms, 1_000);
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn traffic_stats_updated_second_sample_computes_rate() {
+        let mut model = model_with_profiles(vec![]);
+        // Prime with a first sample.
+        handle_traffic_stats_updated(&mut model, 0, 0, 0, 1_000);
+        // 5000 ↑ + 12000 ↓ over 1 second.
+        let effects = handle_traffic_stats_updated(&mut model, 5_000, 12_000, 7, 2_000);
+        assert_eq!(model.traffic.up_rate_bps, 5_000);
+        assert_eq!(model.traffic.down_rate_bps, 12_000);
+        assert_eq!(model.traffic.conn_count, 7);
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn traffic_stats_updated_handles_singbox_restart() {
+        let mut model = model_with_profiles(vec![]);
+        handle_traffic_stats_updated(&mut model, 10_000, 50_000, 5, 1_000);
+        // sing-box restarts → counters reset, but we still get a sample.
+        handle_traffic_stats_updated(&mut model, 100, 200, 1, 2_000);
+        // Rate saturates to 0 for this transition sample.
+        assert_eq!(model.traffic.up_rate_bps, 0);
+        assert_eq!(model.traffic.down_rate_bps, 0);
+        // Totals reflect the new (lower) baseline.
+        assert_eq!(model.traffic.up_total, 100);
+        assert_eq!(model.traffic.down_total, 200);
+    }
+
+    #[test]
+    fn handle_tick_emits_fetch_when_connected() {
+        let mut model = model_with_profiles(vec![]);
+        model.connection = ConnectionState::Connected;
+        model.last_traffic_fetch_at = None;
+        let effects = handle_tick(&mut model);
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::FetchTrafficStats {
+                    prev_up_total: 0,
+                    prev_down_total: 0,
+                    prev_sampled_at_ms: 0,
+                }
+            )),
+            "expected Effect::FetchTrafficStats, got {:?}",
+            effects
+        );
+        assert!(model.last_traffic_fetch_at.is_some());
+    }
+
+    #[test]
+    fn handle_tick_skips_fetch_when_idle() {
+        let mut model = model_with_profiles(vec![]);
+        model.connection = ConnectionState::Idle;
+        let effects = handle_tick(&mut model);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::FetchTrafficStats { .. })),
+            "Idle connection must not poll Clash API"
+        );
+    }
+
+    #[test]
+    fn handle_tick_throttles_within_one_second() {
+        let mut model = model_with_profiles(vec![]);
+        model.connection = ConnectionState::Connected;
+        // First tick → fetch emitted.
+        let _ = handle_tick(&mut model);
+        let first_at = model.last_traffic_fetch_at;
+        // Second tick almost immediately → no additional fetch.
+        let effects = handle_tick(&mut model);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::FetchTrafficStats { .. })),
+            "second tick within 1s must not emit FetchTrafficStats"
+        );
+        assert_eq!(model.last_traffic_fetch_at, first_at);
+    }
+
+    #[test]
+    fn connected_resets_traffic_state() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.traffic.up_total = 9999;
+        model.traffic.down_total = 8888;
+        model.traffic.up_rate_bps = 100;
+        model.last_traffic_sample_at_ms = 1_000;
+        model.last_traffic_fetch_at = Some(Instant::now());
+        let _ = update(&mut model, Msg::Connected { pid: 1234 });
+        assert_eq!(model.traffic, TrafficStats::default());
+        assert_eq!(model.last_traffic_sample_at_ms, 0);
+        assert!(model.last_traffic_fetch_at.is_none());
     }
 }

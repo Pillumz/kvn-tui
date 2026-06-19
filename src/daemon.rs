@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::app::effect::Effect;
-use crate::app::model::{AppStatus, ConnectionState, Model, Overlay};
+use crate::app::model::{AppStatus, ConnectionState, Model, Overlay, TrafficStats};
 use crate::app::msg::{GeoResult, Msg, StateSnapshot};
 use crate::app::update::update;
 use crate::infra::process_handle::ProcessHandle;
@@ -138,6 +138,9 @@ fn execute_daemon_effect(
             model.connection = ConnectionState::Idle;
             model.active_profile_id = None;
             model.singbox_pid = None;
+            model.traffic = TrafficStats::default();
+            model.last_traffic_sample_at_ms = 0;
+            model.last_traffic_fetch_at = None;
             model.set_status(AppStatus::Info("Disconnected".into()));
             model.overlay = Overlay::None;
             crate::services::waybar::write_state(model);
@@ -263,8 +266,37 @@ fn execute_daemon_effect(
                 let _ = tx.send(Msg::KillSwitchApplied { enabled, error });
             });
         }
+        Effect::FetchTrafficStats { .. } => {
+            let tx = tx.clone();
+            thread::spawn(move || match crate::infra::clash_api::fetch_connections() {
+                Ok(snap) => {
+                    let sampled_at_ms = unix_now_ms();
+                    let _ = tx.send(Msg::TrafficStatsUpdated {
+                        up_total: snap.up_total,
+                        down_total: snap.down_total,
+                        conn_count: snap.conn_count,
+                        sampled_at_ms,
+                    });
+                }
+                Err(e) => {
+                    // The endpoint may legitimately be unreachable for a few
+                    // hundred ms after sing-box spawns; don't surface this to
+                    // the user.
+                    tracing::debug!("clash_api fetch failed: {e}");
+                }
+            });
+        }
     }
     Ok(())
+}
+
+/// Wall-clock time in milliseconds since the Unix epoch.
+fn unix_now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// At daemon startup, align `settings.kill_switch` with the actual systemd
@@ -381,6 +413,7 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         profiles: model.config.profiles.clone(),
         subscriptions: model.config.subscriptions.clone(),
         settings: model.config.settings.clone(),
+        traffic: model.traffic.clone(),
     }
 }
 

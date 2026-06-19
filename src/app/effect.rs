@@ -29,4 +29,12 @@ pub enum Effect {
     ApplyKillSwitch {
         enabled: bool,
     },
+    /// Ask the daemon to scrape the Clash API once. Carries the previous
+    /// sample so the daemon's blocking fetcher thread can post back raw
+    /// totals, and the pure-layer reducer computes the rate from the delta.
+    FetchTrafficStats {
+        prev_up_total: u64,
+        prev_down_total: u64,
+        prev_sampled_at_ms: u64,
+    },
 }

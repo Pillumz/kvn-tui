@@ -29,6 +29,7 @@
 - **Auto-connect** — automatically reconnect to the last used profile on startup
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — tail sing-box output in a split-pane view
+- **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
 
 ---
 
@@ -301,7 +302,7 @@ Logs (both sing-box output and app status messages) are written to:
 - ~~**Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly~~ ✅ Done
 - ~~**DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)~~ ✅ Done
 - ~~**All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports~~ ✅ Done
-- **Traffic statistics** — live bandwidth and connection stats in the TUI
+- ~~**Traffic statistics** — live bandwidth and connection stats in the TUI~~ ✅ Done
 - ~~**Export profiles** — export profiles to shareable links~~ ✅ Done
 
 ---

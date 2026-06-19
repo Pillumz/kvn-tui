@@ -1,4 +1,4 @@
-use crate::app::model::{ConnectionState, Overlay};
+use crate::app::model::{ConnectionState, Overlay, TrafficStats};
 use crate::config::profile::{DnsStrategy, Profile, Settings, Subscription};
 use crossterm::event::KeyEvent;
 use uuid::Uuid;
@@ -25,6 +25,15 @@ pub enum Msg {
     KillSwitchApplied {
         enabled: bool,
         error: Option<String>,
+    },
+    /// Raw sample of cumulative byte counters from sing-box's Clash API,
+    /// timestamped so the pure-layer can compute a per-second rate against
+    /// the previous sample stored in `Model::traffic`.
+    TrafficStatsUpdated {
+        up_total: u64,
+        down_total: u64,
+        conn_count: usize,
+        sampled_at_ms: u64,
     },
 }
 
@@ -80,4 +89,6 @@ pub struct StateSnapshot {
     pub profiles: Vec<Profile>,
     pub subscriptions: Vec<Subscription>,
     pub settings: Settings,
+    #[serde(default)]
+    pub traffic: TrafficStats,
 }
