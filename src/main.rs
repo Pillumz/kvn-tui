@@ -1,3 +1,9 @@
+#![warn(unsafe_code)]
+// Tests touch `std::env::set_var` (Rust 2024 unsafe) and other test-only
+// shims that are inherently `unsafe`. These are scoped through
+// `test_helpers::ENV_LOCK` and don't need to fight the lint.
+#![cfg_attr(test, allow(unsafe_code))]
+
 mod app;
 mod cli;
 mod config;

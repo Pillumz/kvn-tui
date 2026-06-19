@@ -20,6 +20,9 @@ pub fn socket_path() -> std::path::PathBuf {
     if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
         std::path::PathBuf::from(dir).join("kvn-tui.sock")
     } else {
+        // getuid is async-signal-safe and has no preconditions; the unsafe is
+        // a libc-binding artefact, not a real invariant.
+        #[allow(unsafe_code)]
         let uid = unsafe { libc::getuid() };
         std::path::PathBuf::from("/tmp").join(format!("kvn-tui-{}.sock", uid))
     }
@@ -186,5 +189,90 @@ impl IpcClient {
             }
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::model::{ConnectionState, Overlay, TrafficStats};
+    use crate::app::msg::StateSnapshot;
+    use crate::config::profile::Settings;
+    use std::sync::mpsc::channel;
+    use std::time::Instant;
+
+    fn drain_one(rx: &std::sync::mpsc::Receiver<Msg>, timeout: Duration) -> Option<Msg> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => return Some(msg),
+                Err(_) if Instant::now() >= deadline => return None,
+                Err(_) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    }
+
+    fn sample_snapshot() -> StateSnapshot {
+        StateSnapshot {
+            connection: ConnectionState::Idle,
+            status: "ok".into(),
+            status_is_error: false,
+            singbox_pid: None,
+            active_profile_id: None,
+            selected: 0,
+            routing_selected: 0,
+            geo_region_selected: 0,
+            dns_selected: 0,
+            dns_strategy_draft: None,
+            geo_updating: false,
+            geo_last_updated: None,
+            overlay: Overlay::None,
+            profiles: vec![],
+            subscriptions: vec![],
+            settings: Settings::default(),
+            traffic: TrafficStats::default(),
+        }
+    }
+
+    /// End-to-end: client → server command, server → client broadcast.
+    /// Pins XDG_RUNTIME_DIR to a tempdir so we don't collide with a real
+    /// daemon's socket.
+    #[test]
+    fn ipc_roundtrip_command_and_broadcast() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        cleanup_socket();
+
+        let (server_tx, server_rx) = channel::<Msg>();
+        let server = IpcServer::bind(server_tx).expect("server bind");
+
+        let mut client = IpcClient::connect().expect("client connect");
+        let (client_tx, client_rx) = channel::<Msg>();
+        client.spawn_reader(client_tx).expect("reader spawn");
+
+        // Client → server.
+        client.send(&IpcCommand::Quit).expect("send quit");
+        match drain_one(&server_rx, Duration::from_secs(2)) {
+            Some(Msg::IpcCommand(IpcCommand::Quit)) => {}
+            Some(_) => panic!("expected Msg::IpcCommand(Quit), got a different Msg variant"),
+            None => panic!("timed out waiting for Msg::IpcCommand(Quit)"),
+        }
+
+        // Server → client. Broadcast happens off the accept thread, so give
+        // the client side a moment to register before we send.
+        thread::sleep(Duration::from_millis(50));
+        server.broadcast(&sample_snapshot());
+        match drain_one(&client_rx, Duration::from_secs(2)) {
+            Some(Msg::StateUpdate(snap)) => {
+                assert_eq!(snap.status, "ok");
+                assert!(matches!(snap.connection, ConnectionState::Idle));
+            }
+            Some(_) => panic!("expected Msg::StateUpdate, got a different Msg variant"),
+            None => panic!("timed out waiting for Msg::StateUpdate"),
+        }
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 }
