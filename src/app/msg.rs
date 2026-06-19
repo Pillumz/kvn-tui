@@ -52,6 +52,10 @@ pub enum IpcCommand {
     Paste {
         text: String,
     },
+    Copied {
+        name: String,
+        count: usize,
+    },
     ReloadConfig,
     Quit,
 }

@@ -19,6 +19,7 @@
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
 - **Profile management** — edit via `$EDITOR`, delete, and organize server profiles
 - **One-click paste** — import share links for any supported protocol or subscription URLs directly from the Wayland clipboard
+- **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
 - **Geo region selection** — choose Russia, China, Iran, or Global on first launch; only relevant routing modes and geo databases are shown/downloaded
 - **Routing modes** — Global, Bypass RU, Only RU, Bypass CN, Only CN, Bypass IR, Only IR (powered by geoip/geosite rule-sets)
@@ -234,6 +235,7 @@ kvn-tui
 | `G` | Go to last profile |
 | `Enter` | Connect to selected profile |
 | `p` | Paste share link or subscription URL from clipboard |
+| `y` | Yank selected profile as a share link (or subscription URL) to clipboard |
 | `d` | Delete selected profile |
 | `m` | Change routing mode |
 | `o` | Select geo region |
@@ -300,7 +302,7 @@ Logs (both sing-box output and app status messages) are written to:
 - ~~**DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)~~ ✅ Done
 - ~~**All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports~~ ✅ Done
 - **Traffic statistics** — live bandwidth and connection stats in the TUI
-- **Export profiles** — export profiles to shareable links
+- ~~**Export profiles** — export profiles to shareable links~~ ✅ Done
 
 ---
 

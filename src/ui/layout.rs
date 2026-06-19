@@ -88,6 +88,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["G", "Go to last"]),
         Row::new(vec!["Enter", "Connect to selected profile"]),
         Row::new(vec!["p", "Paste from clipboard"]),
+        Row::new(vec!["y", "Yank share link to clipboard"]),
         Row::new(vec!["d", "Delete selected source"]),
         Row::new(vec!["m", "Routing mode (popup list)"]),
         Row::new(vec!["o", "Geo region"]),

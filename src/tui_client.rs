@@ -107,6 +107,25 @@ fn run_loop(
                             client.send(&IpcCommand::Paste { text })?;
                         }
                     }
+                    KeyCode::Char('y') if model.overlay == crate::app::model::Overlay::None => {
+                        if let Some(profile) = model.selected_profile() {
+                            if let Ok(link) = crate::config::profile::encode_share_link(profile) {
+                                if crate::infra::clipboard::write_clipboard_text(&link).is_ok() {
+                                    client.send(&IpcCommand::Copied {
+                                        name: profile.name.clone(),
+                                        count: 1,
+                                    })?;
+                                }
+                            }
+                        } else if let Some(sub) = model.selected_subscription() {
+                            if crate::infra::clipboard::write_clipboard_text(&sub.url).is_ok() {
+                                client.send(&IpcCommand::Copied {
+                                    name: sub.name.clone(),
+                                    count: 1,
+                                })?;
+                            }
+                        }
+                    }
                     KeyCode::Char('e') => {
                         event_reading_enabled.store(false, Ordering::Relaxed);
                         disable_raw_mode()?;

@@ -507,6 +507,7 @@ fn handle_ipc_command(model: &mut Model, cmd: crate::app::msg::IpcCommand) -> Ve
             }
         }
         IpcCommand::Paste { text } => handle_clipboard_text(model, &text),
+        IpcCommand::Copied { name, count } => handle_copied_status(model, name, count),
         IpcCommand::ReloadConfig => {
             vec![Effect::ReloadConfig]
         }
@@ -948,6 +949,17 @@ fn replace_preset(
 ) {
     *servers = preset;
     *final_server = new_final.to_string();
+}
+
+fn handle_copied_status(model: &mut Model, name: String, count: usize) -> Vec<Effect> {
+    let msg = if count <= 1 {
+        format!("Copied: {name}")
+    } else {
+        format!("Copied {count} links from {name}")
+    };
+    let mut effects = Vec::new();
+    push_status(&mut effects, model, crate::app::model::AppStatus::Info(msg));
+    effects
 }
 
 fn handle_clipboard_text(model: &mut Model, text: &str) -> Vec<Effect> {
