@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::app::effect::Effect;
 use crate::app::model::{AppStatus, ConnectionState, Model, Overlay, TrafficStats};
-use crate::app::msg::{GeoResult, Msg, StateSnapshot};
+use crate::app::msg::{GeoResult, IpcCommand, Msg, StateSnapshot};
 use crate::app::update::update;
 use crate::infra::process_handle::ProcessHandle;
 use crate::ipc::{IpcServer, cleanup_socket};
@@ -19,6 +19,9 @@ pub fn run(mut model: Model) -> Result<()> {
 
     spawn_ticker(tx.clone());
     spawn_suspend_watcher(tx.clone());
+    if let Err(e) = spawn_signal_handler(tx.clone()) {
+        tracing::warn!("Failed to install signal handler: {e}");
+    }
 
     reconcile_kill_switch_state(&mut model);
 
@@ -432,4 +435,22 @@ fn spawn_suspend_watcher(tx: Sender<Msg>) {
     thread::spawn(move || {
         crate::services::suspend::listen_blocking(tx);
     });
+}
+
+/// Translate SIGTERM/SIGINT into an `IpcCommand::Quit` message so the daemon
+/// can run its normal cleanup path (kill sing-box, remove socket) instead of
+/// being torn down mid-flight by the kernel. Only the first signal is acted
+/// on; further signals fall through to the default disposition.
+fn spawn_signal_handler(tx: Sender<Msg>) -> Result<()> {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+    let mut signals =
+        Signals::new([SIGTERM, SIGINT]).context("Failed to register SIGTERM/SIGINT handler")?;
+    thread::spawn(move || {
+        if let Some(sig) = signals.forever().next() {
+            tracing::info!("Received signal {sig}, shutting down");
+            let _ = tx.send(Msg::IpcCommand(IpcCommand::Quit));
+        }
+    });
+    Ok(())
 }

@@ -35,6 +35,24 @@ pub fn is_daemon_running() -> bool {
     UnixStream::connect(socket_path()).is_ok()
 }
 
+/// Poll for daemon readiness with exponential backoff (10ms → 320ms cap),
+/// returning as soon as the socket accepts a connection. Replaces a fixed
+/// `sleep(300ms)` that was too short on cold/slow systems and too long on
+/// warm ones.
+pub fn wait_for_daemon(timeout: Duration) -> bool {
+    let start = std::time::Instant::now();
+    let mut delay = Duration::from_millis(10);
+    let cap = Duration::from_millis(320);
+    while start.elapsed() < timeout {
+        if is_daemon_running() {
+            return true;
+        }
+        thread::sleep(delay);
+        delay = (delay * 2).min(cap);
+    }
+    is_daemon_running()
+}
+
 /// Daemon-side IPC server.
 pub struct IpcServer {
     clients: Arc<Mutex<Vec<UnixStream>>>,

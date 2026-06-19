@@ -12,7 +12,7 @@ mod ui;
 #[cfg(test)]
 mod test_helpers;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -43,16 +43,34 @@ fn main() -> Result<()> {
         daemon::run(model)?;
     } else {
         if !ipc::is_daemon_running() {
-            let model = Model::new()?;
-            std::thread::spawn(move || {
-                if let Err(e) = daemon::run(model) {
-                    tracing::error!("Daemon error: {}", e);
-                }
-            });
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            spawn_daemon_process()?;
+            if !ipc::wait_for_daemon(std::time::Duration::from_millis(2000)) {
+                anyhow::bail!("daemon failed to start within 2s");
+            }
         }
         tui_client::run()?;
     }
 
+    Ok(())
+}
+
+/// Re-exec ourselves as `kvn-tui --daemon` in a fresh process group so the
+/// daemon outlives the TUI. The previous implementation spawned the daemon
+/// as a thread inside the TUI process — once the user pressed `q`, the
+/// process exited and took the daemon (and sing-box) with it. In the normal
+/// flow this is dead code (the hyprland autostart already runs `--daemon`),
+/// but it matters when that autostart hasn't fired yet.
+fn spawn_daemon_process() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe().context("Failed to determine current executable path")?;
+    Command::new(exe)
+        .arg("--daemon")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .context("Failed to spawn daemon process")?;
     Ok(())
 }
