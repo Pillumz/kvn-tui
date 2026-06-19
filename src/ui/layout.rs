@@ -349,6 +349,19 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
             "No sources. Press p to paste a profile or subscription URL from clipboard.",
         ));
     } else {
+        // Global address-column width: max across all visible profiles so every
+        // row shares the same column layout and aligns vertically.
+        let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
+        let addr_width = model
+            .config
+            .profiles
+            .iter()
+            .map(|p| visual_width(&format!("{}:{}", p.address, p.port)).max(MIN_ADDR_WIDTH))
+            .max()
+            .unwrap_or(MIN_ADDR_WIDTH)
+            .min(MAX_ADDR_WIDTH)
+            .min(remaining.saturating_sub(MIN_NAME_WIDTH));
+
         // Single pass over rows to collect indices — avoids O(n²) position() searches.
         let sub_count = model.config.subscriptions.len();
         let mut standalone: Vec<(usize, usize)> = Vec::new(); // (row_idx, profile_idx)
@@ -381,6 +394,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                     *row_idx,
                     pos == last,
                     inner_width,
+                    addr_width,
                 ));
             }
             lines.push(Line::from(""));
@@ -417,6 +431,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                     *row_idx,
                     pos == last,
                     inner_width,
+                    addr_width,
                 ));
             }
             lines.push(Line::from(""));
@@ -485,16 +500,22 @@ const MIN_NAME_WIDTH: usize = 8;
 const PROTOCOL_WIDTH: usize = 6;
 /// Minimum width for the address:port column.
 const MIN_ADDR_WIDTH: usize = 11;
+/// Maximum width for the address:port column (covers full IPv4 `255.255.255.255:65535`).
+/// Caps the address column so the name is never squeezed below MIN_NAME_WIDTH
+/// even when a profile has a very long hostname.
+const MAX_ADDR_WIDTH: usize = 21;
 /// Fixed overhead: prefix + protocol + two spaces between columns.
 const FIXED_OVERHEAD: usize = PREFIX_WIDTH + PROTOCOL_WIDTH + 2;
 
 /// Build one profile row for the Sources list.
+/// `addr_width` is pre-computed globally so all rows share the same column layout.
 fn profile_line(
     model: &Model,
     profile_idx: usize,
     row_idx: usize,
     is_last: bool,
     inner_width: usize,
+    addr_width: usize,
 ) -> Line<'static> {
     use ratatui::text::Span;
 
@@ -507,8 +528,6 @@ fn profile_line(
 
     let addr_port = format!("{}:{}", profile.address, profile.port);
     let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
-    let ideal_addr = visual_width(&addr_port).max(MIN_ADDR_WIDTH);
-    let addr_width = ideal_addr.min(remaining.saturating_sub(MIN_NAME_WIDTH));
     let name_width = remaining.saturating_sub(addr_width).max(MIN_NAME_WIDTH);
 
     let name_col = fit_to_visual_width(&profile.name, name_width);
@@ -890,6 +909,35 @@ mod tests {
         });
         model.selected = 0;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    /// A very long hostname must not push the name column below MIN_NAME_WIDTH.
+    #[test]
+    fn draw_sources_long_address_does_not_hide_name() {
+        let profiles = vec![
+            Profile::new_vless(
+                "MyProfile".to_string(),
+                "very-long-hostname.infrastructure.example.com".to_string(),
+                65535,
+                "u1".to_string(),
+            ),
+            Profile::new_vless(
+                "Short".to_string(),
+                "1.1.1.1".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+        ];
+        let mut model = model_with_profiles(profiles);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.selected = 0;
+        let output = snapshot_terminal(&model, 80, 20);
+        // Name "MyProfile" must still be visible (truncated to MIN_NAME_WIDTH).
+        assert!(
+            output.contains("MyPro"),
+            "name column vanished with long address"
+        );
+        insta::assert_snapshot!(output);
     }
 
     #[test]
