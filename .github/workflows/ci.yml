@@ -38,6 +38,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # cargo-llvm-cov's --fail-under-* flags do not actually enforce the
+      # threshold in 0.8.x, so parse the TOTAL line ourselves and gate on it.
+      - name: Enforce ≥85% region and line coverage
+        run: |
+          set -euo pipefail
+          cargo llvm-cov --locked --summary-only | tee /tmp/cov.out
+          total=$(grep '^TOTAL' /tmp/cov.out)
+          regions=$(echo "$total" | awk '{print $4}' | tr -d '%')
+          lines=$(echo "$total" | awk '{print $10}' | tr -d '%')
+          echo "region coverage: ${regions}%, line coverage: ${lines}%"
+          awk -v r="$regions" -v l="$lines" 'BEGIN {
+            if (r + 0 < 85 || l + 0 < 85) {
+              printf "FAIL: regions=%s%%, lines=%s%% — minimum is 85%%\n", r, l
+              exit 1
+            }
+            printf "PASS: regions=%s%%, lines=%s%%\n", r, l
+          }'
+
   deny:
     runs-on: ubuntu-latest
     steps:
