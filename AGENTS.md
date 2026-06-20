@@ -116,6 +116,9 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 - Modules are snake_case (`singbox`, not `sing_box`).
 - The binary name is `kvn-tui`; the crate name is `kvn-tui`.
 
+### Module Files
+- Use the **new Rust module style**: a module `foo` with submodules lives in `src/foo.rs` (parent) and `src/foo/bar.rs` (children). Do **not** create `src/foo/mod.rs`; that is the old style and is not used in this project.
+
 ---
 
 ## Testing Patterns
