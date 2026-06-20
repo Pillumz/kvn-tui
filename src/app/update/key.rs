@@ -47,6 +47,15 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('d')
             if model.selected_profile().is_some() || model.selected_subscription().is_some() =>
         {
+            if is_active_connection_affected(model) {
+                let mut effects = vec![];
+                push_status(
+                    &mut effects,
+                    model,
+                    AppStatus::Error("Disconnect before deleting".into()),
+                );
+                return effects;
+            }
             model.overlay = Overlay::ConfirmDelete;
         }
         KeyCode::Char('m') => {
@@ -738,4 +747,30 @@ fn replace_preset(
 ) {
     *servers = preset;
     *final_server = new_final.to_string();
+}
+
+fn is_active_connection_affected(model: &Model) -> bool {
+    let Some(active_id) = model.active_profile_id else {
+        return false;
+    };
+    use crate::app::model::SourceRow;
+    match model.selected_row() {
+        Some(SourceRow::StandaloneProfile(_)) | Some(SourceRow::SubscriptionProfile { .. }) => {
+            model
+                .selected_profile()
+                .map(|p| p.id == active_id)
+                .unwrap_or(false)
+        }
+        Some(SourceRow::SubscriptionHeader(_)) => model
+            .selected_subscription()
+            .map(|sub| {
+                model
+                    .config
+                    .profiles
+                    .iter()
+                    .any(|p| p.subscription_id == Some(sub.id) && p.id == active_id)
+            })
+            .unwrap_or(false),
+        _ => false,
+    }
 }
