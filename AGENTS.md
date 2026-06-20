@@ -122,9 +122,28 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 
 - Tests are co-located in `#[cfg(test)] mod tests` blocks at the bottom of each source file.
 - `src/test_helpers.rs` provides shared test utilities (e.g., `model_with_profiles`).
-- Tests should not depend on external network or the `sing-box` binary unless explicitly marked `#[ignore]`.
+- Tests should not depend on external network or the `sing-box` binary unless explicitly marked `#[ignore]` (or guarded by a `command -v sing-box` runtime check).
 - Use `tempfile` for file-system tests; use `NamedTempFile` / `tempdir()` for isolation.
+- Tests that mutate process environment (`std::env::set_var`) **must** lock `crate::test_helpers::ENV_LOCK` to serialize against other env-touching tests.
+- Snapshot tests use [insta](https://insta.rs/). Regenerate with `INSTA_UPDATE=always cargo test`, then review the diffs before committing.
 - Example pattern: create a default `Profile`, generate a config, assert on JSON structure.
+
+### Coverage Policy
+
+- **Minimum total coverage is 85 %** on both regions and lines. CI enforces this in the `coverage` job — see `.github/workflows/ci.yml`.
+- Any change that lowers total region or line coverage below 85 % must add tests in the same PR to bring it back up. A code change that drops coverage is not "done."
+- Check locally before pushing:
+
+  ```bash
+  # Requires cargo-llvm-cov (install once: cargo install cargo-llvm-cov)
+  # and llvm-tools-preview. On distros without the rustup component, set
+  # LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata.
+  cargo llvm-cov --summary-only
+  ```
+
+  The `TOTAL` line shows region / function / line coverage. Both region and line numbers must be ≥ 85 % for CI to pass.
+- The CI gate parses the `TOTAL` line directly because `cargo-llvm-cov --fail-under-*` flags are silently no-op in the 0.8.x series.
+- 0 %-coverage I/O wrappers (`daemon.rs`, `tui_client.rs`, `main.rs`, `services/killswitch.rs`, `services/suspend.rs`, `infra/clipboard.rs`, `infra/clash_api.rs`, install_* in `cli.rs`) are accepted as-is — they wrap subprocesses, DBus, Unix sockets, and HTTP, which need integration harnesses out of scope for unit tests. **Do not rewrite them just to add fake-based tests.** Cover new logic with pure-function tests instead.
 
 ---
 
@@ -270,7 +289,7 @@ If you need to add a new side effect from `update`, add a new `Effect` variant a
 
 1. Are you preserving atomic file writes for any new config files?
 2. Are you using `anyhow::Result` and `tracing` instead of `println!` / `eprintln!`?
-3. Are tests added for new public functions?
+3. Are tests added for new public functions, and does `cargo llvm-cov --summary-only` still report **≥ 85 %** region and line coverage?
 4. Are you respecting the Arch + Wayland constraint (no X11 fallbacks added silently)?
 5. Does the sing-box config generation remain valid for sing-box 1.12+?
-6. Have you run `cargo fmt` to ensure consistent code formatting?
+6. Have you run `cargo fmt` and `cargo clippy --all-targets --all-features` and fixed any warnings?
