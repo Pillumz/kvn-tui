@@ -47,7 +47,7 @@ table inet kvn_tui_killswitch {
     }
 
     chain input {
-        type filter hook input priority 0; policy drop;
+        type filter hook input priority -10; policy drop;
         iifname "lo" accept
         iifname "tun*" accept
         ct state established,related accept
@@ -59,7 +59,7 @@ table inet kvn_tui_killswitch {
     }
 
     chain output {
-        type filter hook output priority 0; policy drop;
+        type filter hook output priority -10; policy drop;
         oifname "lo" accept
         oifname "tun*" accept
         # Packets marked by sing-box (route.default_mark = 666 / 0x29a). This
@@ -77,7 +77,7 @@ table inet kvn_tui_killswitch {
     }
 
     chain forward {
-        type filter hook forward priority 0; policy drop;
+        type filter hook forward priority -10; policy drop;
         oifname "tun*" accept
         ct state established,related accept
     }
