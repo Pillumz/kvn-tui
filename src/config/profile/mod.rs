@@ -2104,4 +2104,172 @@ mod tests {
         };
         assert_roundtrip(p);
     }
+
+    // ---- ShadowtlsVersion ----
+
+    #[test]
+    fn shadowtls_version_as_u8_maps_each_variant() {
+        assert_eq!(ShadowtlsVersion::V1.as_u8(), 1);
+        assert_eq!(ShadowtlsVersion::V2.as_u8(), 2);
+        assert_eq!(ShadowtlsVersion::V3.as_u8(), 3);
+    }
+
+    #[test]
+    fn shadowtls_version_serializes_as_numeric() {
+        assert_eq!(serde_json::to_string(&ShadowtlsVersion::V1).unwrap(), "1");
+        assert_eq!(serde_json::to_string(&ShadowtlsVersion::V2).unwrap(), "2");
+        assert_eq!(serde_json::to_string(&ShadowtlsVersion::V3).unwrap(), "3");
+    }
+
+    #[test]
+    fn shadowtls_version_deserializes_each_known_value() {
+        let v: ShadowtlsVersion = serde_json::from_str("1").unwrap();
+        assert_eq!(v, ShadowtlsVersion::V1);
+        let v: ShadowtlsVersion = serde_json::from_str("2").unwrap();
+        assert_eq!(v, ShadowtlsVersion::V2);
+        let v: ShadowtlsVersion = serde_json::from_str("3").unwrap();
+        assert_eq!(v, ShadowtlsVersion::V3);
+    }
+
+    #[test]
+    fn shadowtls_version_rejects_unknown_value() {
+        let err = serde_json::from_str::<ShadowtlsVersion>("4").unwrap_err();
+        assert!(err.to_string().contains("unknown ShadowTLS version"));
+    }
+
+    #[test]
+    fn shadowtls_version_default_is_v3() {
+        assert_eq!(ShadowtlsVersion::default(), ShadowtlsVersion::V3);
+    }
+
+    // ---- TlsCommon::validate ----
+
+    #[test]
+    fn tls_common_validate_accepts_plain() {
+        TlsCommon::default().validate().unwrap();
+    }
+
+    #[test]
+    fn tls_common_validate_accepts_reality_only() {
+        let tls = TlsCommon {
+            reality: Some(RealitySettings {
+                public_key: "pk".into(),
+                short_id: "sid".into(),
+                server_name: "sn".into(),
+                spider_x: "/".into(),
+            }),
+            ..TlsCommon::default()
+        };
+        tls.validate().unwrap();
+    }
+
+    #[test]
+    fn tls_common_validate_accepts_ech_only() {
+        let tls = TlsCommon {
+            ech: Some(EchSettings {
+                enabled: true,
+                ..EchSettings::default()
+            }),
+            ..TlsCommon::default()
+        };
+        tls.validate().unwrap();
+    }
+
+    #[test]
+    fn tls_common_validate_accepts_reality_with_disabled_ech() {
+        // The mutual-exclusion check fires only when ECH is *enabled*.
+        let tls = TlsCommon {
+            reality: Some(RealitySettings {
+                public_key: "pk".into(),
+                short_id: "sid".into(),
+                server_name: "sn".into(),
+                spider_x: "/".into(),
+            }),
+            ech: Some(EchSettings {
+                enabled: false,
+                ..EchSettings::default()
+            }),
+            ..TlsCommon::default()
+        };
+        tls.validate().unwrap();
+    }
+
+    #[test]
+    fn tls_common_validate_rejects_reality_with_enabled_ech() {
+        let tls = TlsCommon {
+            reality: Some(RealitySettings {
+                public_key: "pk".into(),
+                short_id: "sid".into(),
+                server_name: "sn".into(),
+                spider_x: "/".into(),
+            }),
+            ech: Some(EchSettings {
+                enabled: true,
+                ..EchSettings::default()
+            }),
+            ..TlsCommon::default()
+        };
+        let err = tls.validate().unwrap_err().to_string();
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    // ---- Config::migrate ----
+
+    #[test]
+    fn migrate_v0_promotes_legacy_dns_strategy() {
+        let mut cfg = Config {
+            schema_version: 0,
+            ..Config::default()
+        };
+        // Legacy field set, new field at default → promote.
+        cfg.settings.dns_strategy = DnsStrategy::OnlyIpv6;
+        cfg.settings.dns.strategy = DnsStrategy::default(); // PreferIpv4
+        cfg.migrate();
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.settings.dns.strategy, DnsStrategy::OnlyIpv6);
+        assert_eq!(cfg.settings.dns_strategy, DnsStrategy::OnlyIpv6);
+    }
+
+    #[test]
+    fn migrate_v0_keeps_new_dns_strategy_when_legacy_is_default() {
+        let mut cfg = Config {
+            schema_version: 0,
+            ..Config::default()
+        };
+        cfg.settings.dns.strategy = DnsStrategy::OnlyIpv4;
+        cfg.settings.dns_strategy = DnsStrategy::default();
+        cfg.migrate();
+        // New field wins; legacy is synced from it.
+        assert_eq!(cfg.settings.dns.strategy, DnsStrategy::OnlyIpv4);
+        assert_eq!(cfg.settings.dns_strategy, DnsStrategy::OnlyIpv4);
+    }
+
+    #[test]
+    fn migrate_is_noop_when_schema_already_current() {
+        let mut cfg = Config {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            ..Config::default()
+        };
+        cfg.settings.dns_strategy = DnsStrategy::OnlyIpv6;
+        cfg.settings.dns.strategy = DnsStrategy::OnlyIpv4;
+        cfg.migrate();
+        // No promotion when schema_version != 0.
+        assert_eq!(cfg.settings.dns.strategy, DnsStrategy::OnlyIpv4);
+        assert_eq!(cfg.settings.dns_strategy, DnsStrategy::OnlyIpv6);
+    }
+
+    #[test]
+    fn migrate_v0_is_idempotent() {
+        let mut cfg = Config {
+            schema_version: 0,
+            ..Config::default()
+        };
+        cfg.settings.dns_strategy = DnsStrategy::OnlyIpv6;
+        cfg.migrate();
+        let after_first = cfg.clone();
+        cfg.migrate();
+        assert_eq!(cfg.schema_version, after_first.schema_version);
+        assert_eq!(cfg.settings.dns.strategy, after_first.settings.dns.strategy);
+        assert_eq!(cfg.settings.dns_strategy, after_first.settings.dns_strategy);
+    }
 }

@@ -275,4 +275,125 @@ mod tests {
         cleanup_socket();
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
+
+    #[test]
+    fn socket_path_uses_xdg_runtime_dir_when_set() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        let p = socket_path();
+        assert!(p.starts_with(tmp.path()));
+        assert_eq!(p.file_name().unwrap(), "kvn-tui.sock");
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn socket_path_falls_back_to_tmp_with_uid_when_no_xdg() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let prev = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+        let p = socket_path();
+        assert!(p.starts_with("/tmp"));
+        let name = p.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("kvn-tui-"));
+        assert!(name.ends_with(".sock"));
+        unsafe {
+            if let Some(v) = prev {
+                std::env::set_var("XDG_RUNTIME_DIR", v);
+            }
+        }
+    }
+
+    #[test]
+    fn is_daemon_running_returns_false_when_no_socket() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        assert!(!is_daemon_running());
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn wait_for_daemon_times_out_without_server() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_RUNTIME_DIR");
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        let started = std::time::Instant::now();
+        assert!(!wait_for_daemon(Duration::from_millis(50)));
+        // Sanity: it must have actually polled and not returned instantly.
+        assert!(started.elapsed() >= Duration::from_millis(40));
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn server_ignores_malformed_command_json() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        cleanup_socket();
+
+        let (server_tx, server_rx) = channel::<Msg>();
+        let _server = IpcServer::bind(server_tx).expect("server bind");
+
+        let mut stream = UnixStream::connect(socket_path()).expect("client connect");
+        stream
+            .write_all(b"this is not json\n")
+            .expect("write garbage");
+        stream.flush().unwrap();
+
+        // Server must NOT forward a Msg for an unparseable line.
+        assert!(drain_one(&server_rx, Duration::from_millis(200)).is_none());
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn broadcast_drops_dead_clients() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        cleanup_socket();
+
+        let (server_tx, _server_rx) = channel::<Msg>();
+        let server = IpcServer::bind(server_tx).expect("server bind");
+
+        // Connect a client and immediately drop it without reading anything.
+        {
+            let _client = IpcClient::connect().expect("connect");
+        }
+        // Give the accept thread time to register the client.
+        thread::sleep(Duration::from_millis(50));
+
+        // First broadcast may succeed (kernel buffers the line); a subsequent
+        // shutdown means at least one will encounter EPIPE. Loop a few times
+        // so the dead client is reaped.
+        for _ in 0..5 {
+            server.broadcast(&sample_snapshot());
+        }
+        // After reaping there should be zero live clients tracked.
+        let live = server.clients.lock().unwrap().len();
+        assert_eq!(live, 0, "expected dead client to be reaped");
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
 }

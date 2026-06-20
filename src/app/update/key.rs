@@ -774,3 +774,607 @@ fn is_active_connection_affected(model: &Model) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::profile::{
+        DnsServer, DnsStrategy, Profile, Subscription, SubscriptionAutoUpdate,
+    };
+    use crate::test_helpers::{key, model_with_profiles};
+    use crossterm::event::{KeyCode, KeyEvent};
+    use uuid::Uuid;
+
+    fn enter() -> KeyEvent {
+        KeyEvent::from(KeyCode::Enter)
+    }
+
+    fn esc() -> KeyEvent {
+        KeyEvent::from(KeyCode::Esc)
+    }
+
+    fn with_dns_overlay() -> Model {
+        let mut model = model_with_profiles(vec![]);
+        model.overlay = Overlay::DnsSettings;
+        model
+    }
+
+    fn final_server_is(model: &Model, expected_kind: fn(&DnsServer) -> bool) -> bool {
+        model
+            .config
+            .settings
+            .dns
+            .final_server_entry()
+            .map(expected_kind)
+            .unwrap_or(false)
+    }
+
+    // ---- handle_dns_settings ----
+
+    #[test]
+    fn dns_settings_navigation_wraps() {
+        let mut model = with_dns_overlay();
+        assert_eq!(model.dns_selected, 0);
+        handle_dns_settings(&mut model, key('j'));
+        assert_eq!(model.dns_selected, 1);
+        handle_dns_settings(&mut model, key('k'));
+        assert_eq!(model.dns_selected, 0);
+        handle_dns_settings(&mut model, key('G'));
+        assert_eq!(model.dns_selected, DnsSettingsItem::ALL.len() - 1);
+        handle_dns_settings(&mut model, key('g'));
+        assert_eq!(model.dns_selected, 0);
+    }
+
+    #[test]
+    fn dns_settings_navigation_arrows() {
+        let mut model = with_dns_overlay();
+        handle_dns_settings(&mut model, KeyEvent::from(KeyCode::Down));
+        assert_eq!(model.dns_selected, 1);
+        handle_dns_settings(&mut model, KeyEvent::from(KeyCode::Up));
+        assert_eq!(model.dns_selected, 0);
+    }
+
+    #[test]
+    fn dns_settings_h_l_only_on_strategy() {
+        let mut model = with_dns_overlay();
+        // Cursor on Cloudflare preset → h/l do nothing.
+        handle_dns_settings(&mut model, key('l'));
+        assert!(model.dns_strategy_draft.is_none());
+        handle_dns_settings(&mut model, key('h'));
+        assert!(model.dns_strategy_draft.is_none());
+    }
+
+    #[test]
+    fn dns_settings_l_cycles_strategy_draft_forward() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        // Default is PreferIpv4; l → PreferIpv6.
+        handle_dns_settings(&mut model, key('l'));
+        assert_eq!(model.dns_strategy_draft, Some(DnsStrategy::PreferIpv6));
+        // l again → OnlyIpv4.
+        handle_dns_settings(&mut model, KeyEvent::from(KeyCode::Right));
+        assert_eq!(model.dns_strategy_draft, Some(DnsStrategy::OnlyIpv4));
+    }
+
+    #[test]
+    fn dns_settings_h_cycles_strategy_draft_backward() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        handle_dns_settings(&mut model, key('h'));
+        assert_eq!(model.dns_strategy_draft, Some(DnsStrategy::OnlyIpv6));
+        handle_dns_settings(&mut model, KeyEvent::from(KeyCode::Left));
+        assert_eq!(model.dns_strategy_draft, Some(DnsStrategy::OnlyIpv4));
+    }
+
+    #[test]
+    fn dns_settings_enter_strategy_no_draft_is_noop() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        let before = model.config.settings.dns.strategy.clone();
+        let effects = handle_dns_settings(&mut model, enter());
+        assert!(effects.is_empty());
+        assert_eq!(model.config.settings.dns.strategy, before);
+    }
+
+    #[test]
+    fn dns_settings_enter_strategy_commits_draft() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        model.dns_strategy_draft = Some(DnsStrategy::OnlyIpv4);
+        let effects = handle_dns_settings(&mut model, enter());
+        assert_eq!(model.config.settings.dns.strategy, DnsStrategy::OnlyIpv4);
+        assert_eq!(model.config.settings.dns_strategy, DnsStrategy::OnlyIpv4);
+        assert!(effects.contains(&Effect::SaveConfig));
+        assert!(effects.contains(&Effect::BroadcastState));
+        assert!(model.dns_strategy_draft.is_none());
+    }
+
+    #[test]
+    fn dns_settings_enter_strategy_same_value_is_noop() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        // Draft equals current — Enter discards draft, emits nothing.
+        let same = model.config.settings.dns.strategy.clone();
+        model.dns_strategy_draft = Some(same.clone());
+        let effects = handle_dns_settings(&mut model, enter());
+        assert!(effects.is_empty());
+        assert!(model.dns_strategy_draft.is_none());
+        assert_eq!(model.config.settings.dns.strategy, same);
+    }
+
+    #[test]
+    fn dns_settings_enter_cloudflare_preset() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = 0;
+        let effects = handle_dns_settings(&mut model, enter());
+        assert!(effects.contains(&Effect::SaveConfig));
+        assert!(effects.contains(&Effect::BroadcastState));
+        assert!(final_server_is(&model, |s| matches!(
+            s,
+            DnsServer::Https { server, .. } if server == "1.1.1.1"
+        )));
+    }
+
+    #[test]
+    fn dns_settings_enter_google_preset() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = 1;
+        handle_dns_settings(&mut model, enter());
+        assert!(final_server_is(&model, |s| matches!(
+            s,
+            DnsServer::Tls { server, .. } if server == "8.8.8.8"
+        )));
+    }
+
+    #[test]
+    fn dns_settings_enter_quad9_preset() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = 2;
+        handle_dns_settings(&mut model, enter());
+        assert!(final_server_is(&model, |s| matches!(
+            s,
+            DnsServer::Https { server, .. } if server == "9.9.9.9"
+        )));
+    }
+
+    #[test]
+    fn dns_settings_enter_system_preset() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = 3;
+        handle_dns_settings(&mut model, enter());
+        assert!(final_server_is(&model, |s| matches!(
+            s,
+            DnsServer::Local { .. }
+        )));
+        assert_eq!(model.config.settings.dns.servers.len(), 1);
+    }
+
+    #[test]
+    fn dns_settings_toggle_fakeip_enables_and_adds_server() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::ToggleFakeIp)
+            .unwrap();
+        assert!(!model.config.settings.dns.fakeip_enabled);
+        handle_dns_settings(&mut model, enter());
+        assert!(model.config.settings.dns.fakeip_enabled);
+        assert!(model.config.settings.dns.fakeip_server().is_some());
+    }
+
+    #[test]
+    fn dns_settings_toggle_fakeip_disables_back() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::ToggleFakeIp)
+            .unwrap();
+        // First toggle on.
+        handle_dns_settings(&mut model, enter());
+        assert!(model.config.settings.dns.fakeip_enabled);
+        // Second toggle off.
+        handle_dns_settings(&mut model, enter());
+        assert!(!model.config.settings.dns.fakeip_enabled);
+    }
+
+    #[test]
+    fn dns_settings_toggle_fakeip_forces_ipv4_strategy() {
+        let mut model = with_dns_overlay();
+        model.config.settings.dns.strategy = DnsStrategy::OnlyIpv6;
+        model.config.settings.dns_strategy = DnsStrategy::OnlyIpv6;
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::ToggleFakeIp)
+            .unwrap();
+        handle_dns_settings(&mut model, enter());
+        assert_eq!(model.config.settings.dns.strategy, DnsStrategy::PreferIpv4);
+        assert_eq!(model.config.settings.dns_strategy, DnsStrategy::PreferIpv4);
+    }
+
+    #[test]
+    fn dns_settings_esc_clears_draft_and_closes_overlay() {
+        let mut model = with_dns_overlay();
+        model.dns_selected = DnsSettingsItem::ALL
+            .iter()
+            .position(|i| *i == DnsSettingsItem::CycleStrategy)
+            .unwrap();
+        model.dns_strategy_draft = Some(DnsStrategy::OnlyIpv6);
+        let effects = handle_dns_settings(&mut model, esc());
+        assert!(effects.is_empty());
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(model.dns_strategy_draft.is_none());
+    }
+
+    #[test]
+    fn dns_settings_q_closes_overlay() {
+        let mut model = with_dns_overlay();
+        handle_dns_settings(&mut model, key('q'));
+        assert_eq!(model.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn dns_settings_changing_preset_while_connected_triggers_reconnect() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.overlay = Overlay::DnsSettings;
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[0].id);
+        model.dns_selected = 1; // Google DoT
+        let effects = handle_dns_settings(&mut model, enter());
+        assert_eq!(model.connection, ConnectionState::Connecting);
+        assert!(effects.iter().any(|e| matches!(e, Effect::Connect { .. })));
+    }
+
+    #[test]
+    fn dns_settings_unknown_key_is_noop() {
+        let mut model = with_dns_overlay();
+        let before = model.dns_selected;
+        let effects = handle_dns_settings(&mut model, key('z'));
+        assert!(effects.is_empty());
+        assert_eq!(model.dns_selected, before);
+    }
+
+    // ---- handle_sources gaps ----
+
+    #[test]
+    fn sources_d_blocked_when_active_profile_selected() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[0].id);
+        model.selected = 0;
+        let effects = handle_sources(&mut model, key('d'));
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(model.status.is_error());
+        assert!(model.status.text().contains("Disconnect before"));
+        // Effect carries the AppendAppLog only (no SaveConfig, no opening overlay).
+        assert!(!effects.iter().any(|e| matches!(e, Effect::SaveConfig)));
+    }
+
+    #[test]
+    fn sources_d_blocked_when_active_profile_under_subscription_header() {
+        // Create a subscription with one profile that's currently active.
+        let sub_id = Uuid::new_v4();
+        let mut profile = Profile::new_vless("A".into(), "1.1.1.1".into(), 443, "u".into());
+        profile.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![profile]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".into(),
+            url: "http://s".into(),
+            auto_update: SubscriptionAutoUpdate::Off,
+            last_updated: None,
+        });
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[0].id);
+        // Select the subscription header (first row now that the standalone group is empty).
+        model.selected = crate::app::model::row_for_subscription_header(&model.config, 0);
+        let _ = handle_sources(&mut model, key('d'));
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(model.status.is_error());
+    }
+
+    #[test]
+    fn sources_o_opens_geo_regions_preselecting_current() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_routing.set_region(GeoRegion::Cn);
+        let _ = handle_sources(&mut model, key('o'));
+        assert_eq!(model.overlay, Overlay::GeoRegions);
+        assert_eq!(model.geo_region_selected, 1);
+    }
+
+    #[test]
+    fn sources_o_preselects_ir_and_global_and_falls_back_to_zero() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_routing.set_region(GeoRegion::Ir);
+        let _ = handle_sources(&mut model, key('o'));
+        assert_eq!(model.geo_region_selected, 2);
+
+        let mut model = model_with_profiles(vec![]);
+        model
+            .config
+            .settings
+            .geo_routing
+            .set_region(GeoRegion::Global);
+        let _ = handle_sources(&mut model, key('o'));
+        assert_eq!(model.geo_region_selected, 3);
+
+        // No region set → defaults to 0.
+        let mut model = model_with_profiles(vec![]);
+        let _ = handle_sources(&mut model, key('o'));
+        assert_eq!(model.geo_region_selected, 0);
+    }
+
+    #[test]
+    fn sources_capital_d_opens_dns_settings_and_resets_draft() {
+        let mut model = model_with_profiles(vec![]);
+        model.dns_selected = 4;
+        model.dns_strategy_draft = Some(DnsStrategy::OnlyIpv6);
+        let effects = handle_sources(&mut model, key('D'));
+        assert!(effects.is_empty());
+        assert_eq!(model.overlay, Overlay::DnsSettings);
+        assert_eq!(model.dns_selected, 0);
+        assert!(model.dns_strategy_draft.is_none());
+    }
+
+    #[test]
+    fn sources_unknown_key_is_noop() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        let before_selected = model.selected;
+        let before_overlay = model.overlay;
+        let effects = handle_sources(&mut model, key('z'));
+        assert!(effects.is_empty());
+        assert_eq!(model.selected, before_selected);
+        assert_eq!(model.overlay, before_overlay);
+    }
+
+    #[test]
+    fn sources_r_ignored_when_not_connected() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        // Idle by default.
+        let effects = handle_sources(&mut model, key('r'));
+        assert!(effects.is_empty());
+        assert_eq!(model.connection, ConnectionState::Idle);
+    }
+
+    #[test]
+    fn sources_i_on_non_subscription_is_noop() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        // Cursor on standalone profile, not on a subscription header.
+        let effects = handle_sources(&mut model, key('i'));
+        assert!(effects.is_empty());
+    }
+
+    // ---- handle_enter_on_sources gaps ----
+
+    #[test]
+    fn enter_on_empty_sources_lists_a_message() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_enter_on_sources(&mut model);
+        // No profile, no subscription → status message, no effects beyond log.
+        assert!(model.status.text().contains("No sources"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Connect { .. })));
+    }
+
+    // ---- handle_confirm_delete gaps ----
+
+    #[test]
+    fn confirm_delete_enter_on_profile_deletes() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.overlay = Overlay::ConfirmDelete;
+        let effects = handle_confirm_delete(&mut model, enter());
+        assert!(model.config.profiles.is_empty());
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(effects.contains(&Effect::SaveConfig));
+    }
+
+    #[test]
+    fn confirm_delete_y_on_subscription_header_deletes_sub() {
+        let sub_id = Uuid::new_v4();
+        let mut profile = Profile::new_vless("A".into(), "1.1.1.1".into(), 443, "u".into());
+        profile.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![profile]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Example".into(),
+            url: "http://e".into(),
+            auto_update: SubscriptionAutoUpdate::Off,
+            last_updated: None,
+        });
+        model.overlay = Overlay::ConfirmDelete;
+        model.selected = crate::app::model::row_for_subscription_header(&model.config, 0);
+        let effects = handle_confirm_delete(&mut model, key('y'));
+        assert!(model.config.subscriptions.is_empty());
+        assert!(model.config.profiles.is_empty());
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::AppendAppLog { message, .. } if message.contains("Example"))
+        ));
+    }
+
+    #[test]
+    fn confirm_delete_esc_cancels() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.overlay = Overlay::ConfirmDelete;
+        let effects = handle_confirm_delete(&mut model, esc());
+        assert_eq!(model.config.profiles.len(), 1);
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn confirm_delete_unknown_key_noop() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "A".into(),
+            "1.1.1.1".into(),
+            443,
+            "u".into(),
+        )]);
+        model.overlay = Overlay::ConfirmDelete;
+        let effects = handle_confirm_delete(&mut model, key('z'));
+        assert_eq!(model.config.profiles.len(), 1);
+        // Unknown key leaves overlay open.
+        assert_eq!(model.overlay, Overlay::ConfirmDelete);
+        assert!(effects.is_empty());
+    }
+
+    // ---- derive_subscription_name ----
+
+    #[test]
+    fn derive_subscription_name_uses_host_when_present() {
+        assert_eq!(
+            derive_subscription_name("https://example.com/sub"),
+            "example.com"
+        );
+        assert_eq!(
+            derive_subscription_name("https://sub.example.com:8443/path?q=1"),
+            "sub.example.com"
+        );
+    }
+
+    #[test]
+    fn derive_subscription_name_ip_url() {
+        assert_eq!(derive_subscription_name("http://1.2.3.4/sub"), "1.2.3.4");
+    }
+
+    #[test]
+    fn derive_subscription_name_invalid_url_fallback() {
+        assert_eq!(derive_subscription_name("not a url"), "Subscription");
+    }
+
+    #[test]
+    fn derive_subscription_name_url_without_host_fallback() {
+        // `file:` URLs parse but have no host.
+        assert_eq!(derive_subscription_name("file:///tmp/sub"), "Subscription");
+    }
+
+    // ---- rebuild_key_event ----
+
+    #[test]
+    fn rebuild_key_event_named_codes() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        assert_eq!(
+            rebuild_key_event("Enter", None, false).unwrap().code,
+            KeyCode::Enter
+        );
+        assert_eq!(
+            rebuild_key_event("Esc", None, false).unwrap().code,
+            KeyCode::Esc
+        );
+        assert_eq!(
+            rebuild_key_event("Up", None, false).unwrap().code,
+            KeyCode::Up
+        );
+        assert_eq!(
+            rebuild_key_event("Down", None, false).unwrap().code,
+            KeyCode::Down
+        );
+        let ctrl_c = rebuild_key_event("Char", Some('c'), true).unwrap();
+        assert_eq!(ctrl_c.code, KeyCode::Char('c'));
+        assert_eq!(ctrl_c.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn rebuild_key_event_char_without_value_uses_space() {
+        let event = rebuild_key_event("Char", None, false).unwrap();
+        assert_eq!(event.code, crossterm::event::KeyCode::Char(' '));
+    }
+
+    #[test]
+    fn rebuild_key_event_unknown_code_returns_none() {
+        assert!(rebuild_key_event("F1", None, false).is_none());
+        assert!(rebuild_key_event("", None, false).is_none());
+    }
+
+    // ---- handle_ipc_command gaps ----
+
+    #[test]
+    fn ipc_command_detach_emits_broadcast_only() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(&mut model, crate::app::msg::IpcCommand::Detach);
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn ipc_command_quit_emits_quit_then_broadcast() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(&mut model, crate::app::msg::IpcCommand::Quit);
+        assert_eq!(effects, vec![Effect::Quit, Effect::BroadcastState]);
+    }
+
+    #[test]
+    fn ipc_command_copied_sets_status_and_broadcasts() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(
+            &mut model,
+            crate::app::msg::IpcCommand::Copied {
+                name: "Alpha".into(),
+                count: 3,
+            },
+        );
+        assert!(effects.iter().any(|e| matches!(e, Effect::BroadcastState)));
+        assert!(model.status.text().contains("Alpha"));
+    }
+
+    #[test]
+    fn ipc_command_key_with_unknown_code_only_broadcasts() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(
+            &mut model,
+            crate::app::msg::IpcCommand::Key {
+                code: "F1".into(),
+                char: None,
+                ctrl: false,
+            },
+        );
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+    }
+}

@@ -483,6 +483,133 @@ mod tests {
         let _ = fs::remove_file(&dest);
     }
 
+    #[test]
+    fn local_paths_ir_filenames() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
+        assert_eq!(geoip_ir.file_name().unwrap(), "geoip-ir.srs");
+        assert_eq!(geosite_ir.file_name().unwrap(), "geosite-category-ir.srs");
+        assert!(geoip_ir.starts_with(&gm.geo_dir));
+        assert!(geosite_ir.starts_with(&gm.geo_dir));
+    }
+
+    #[test]
+    fn has_databases_cn_and_ir_match_file_presence() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+
+        // CN
+        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
+        let _ = fs::remove_file(&geoip_cn);
+        let _ = fs::remove_file(&geosite_cn);
+        assert!(!gm.has_databases(GeoRegion::Cn));
+        fs::write(&geoip_cn, b"x").unwrap();
+        assert!(!gm.has_databases(GeoRegion::Cn));
+        fs::write(&geosite_cn, b"x").unwrap();
+        assert!(gm.has_databases(GeoRegion::Cn));
+
+        // IR
+        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
+        let _ = fs::remove_file(&geoip_ir);
+        let _ = fs::remove_file(&geosite_ir);
+        assert!(!gm.has_databases(GeoRegion::Ir));
+        fs::write(&geoip_ir, b"x").unwrap();
+        fs::write(&geosite_ir, b"x").unwrap();
+        assert!(gm.has_databases(GeoRegion::Ir));
+    }
+
+    #[test]
+    fn last_updated_returns_none_for_global() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        assert!(gm.last_updated(GeoRegion::Global).is_none());
+    }
+
+    #[test]
+    fn last_updated_returns_none_when_metadata_missing() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let _ = fs::remove_file(&gm.metadata_path);
+        assert!(gm.last_updated(GeoRegion::Ru).is_none());
+        assert!(gm.last_updated(GeoRegion::Cn).is_none());
+        assert!(gm.last_updated(GeoRegion::Ir).is_none());
+    }
+
+    #[test]
+    fn last_updated_returns_formatted_string_after_save() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let mut updated_at = HashMap::new();
+        let dt = Local::now();
+        updated_at.insert(GeoRegion::Ru, dt);
+        let meta = GeoMetadata {
+            updated_at,
+            ..GeoMetadata::default()
+        };
+        gm.save_metadata(&meta).unwrap();
+        let formatted = gm.last_updated(GeoRegion::Ru).unwrap();
+        // "%Y-%m-%d %H:%M" — 16 chars.
+        assert_eq!(formatted.len(), 16);
+        assert_eq!(formatted, dt.format("%Y-%m-%d %H:%M").to_string());
+        // A region with no entry still returns None.
+        assert!(gm.last_updated(GeoRegion::Cn).is_none());
+    }
+
+    #[test]
+    fn check_update_available_global_returns_no_updates() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        // Global short-circuits without any HTTP call.
+        let (a, b) = gm.check_update_available(GeoRegion::Global).unwrap();
+        assert!(!a);
+        assert!(!b);
+    }
+
+    #[test]
+    fn download_databases_global_is_noop() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        assert!(!gm.download_databases(GeoRegion::Global).unwrap());
+        // Metadata file should not have been created.
+        assert!(!gm.metadata_path.exists());
+    }
+
+    #[test]
+    fn update_if_needed_global_is_up_to_date() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let result = gm.update_if_needed(GeoRegion::Global).unwrap();
+        assert!(matches!(result, GeoResult::UpToDate));
+    }
+
+    #[test]
+    fn load_metadata_parse_error_is_propagated() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        fs::write(&gm.metadata_path, b"not valid json {{").unwrap();
+        let err = gm.load_metadata().unwrap_err().to_string();
+        assert!(err.contains("Failed to parse"));
+    }
+
     /// Integration test that hits the real network. Run with `cargo test -- --ignored`.
     #[test]
     #[ignore]

@@ -390,4 +390,158 @@ mod tests {
 
         assert_eq!(find_profile_line(&path, 0), None);
     }
+
+    // ---- editor_args ----
+
+    #[test]
+    fn editor_args_vim_uses_plus_line() {
+        let path = Path::new("/tmp/profiles.json");
+        let args = editor_args("vim", path, 42);
+        assert_eq!(args, vec!["+42".to_string(), "/tmp/profiles.json".into()]);
+    }
+
+    #[test]
+    fn editor_args_nvim_uses_plus_line() {
+        let args = editor_args("nvim", Path::new("/tmp/p.json"), 7);
+        assert_eq!(args[0], "+7");
+        assert!(args[1].ends_with("p.json"));
+    }
+
+    #[test]
+    fn editor_args_nano_uses_plus_line() {
+        let args = editor_args("nano", Path::new("/x.json"), 3);
+        assert_eq!(args[0], "+3");
+    }
+
+    #[test]
+    fn editor_args_code_uses_goto_flag() {
+        let args = editor_args("code", Path::new("/tmp/profiles.json"), 12);
+        assert_eq!(
+            args,
+            vec!["--goto".to_string(), "/tmp/profiles.json:12".into()]
+        );
+    }
+
+    #[test]
+    fn editor_args_code_oss_and_codium_use_goto() {
+        let a = editor_args("code-oss", Path::new("/p.json"), 1);
+        let b = editor_args("codium", Path::new("/p.json"), 1);
+        assert_eq!(a[0], "--goto");
+        assert_eq!(b[0], "--goto");
+    }
+
+    #[test]
+    fn editor_args_unknown_editor_uses_plus_line() {
+        let args = editor_args("helix", Path::new("/x.json"), 9);
+        assert_eq!(args[0], "+9");
+        assert_eq!(args[1], "/x.json");
+    }
+
+    #[test]
+    fn editor_args_handles_full_path_to_editor() {
+        // Full path: only the file_name is matched against the switch table.
+        let args = editor_args("/usr/bin/code", Path::new("/p.json"), 2);
+        assert_eq!(args[0], "--goto");
+    }
+
+    // ---- detect_editor ----
+
+    #[test]
+    fn detect_editor_prefers_visual_over_editor() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let prev_visual = env::var("VISUAL").ok();
+        let prev_editor = env::var("EDITOR").ok();
+        // SAFETY: tests using ENV_LOCK serialize env mutation.
+        unsafe {
+            env::set_var("VISUAL", "my-visual-editor");
+            env::set_var("EDITOR", "my-other-editor");
+        }
+        assert_eq!(detect_editor(), "my-visual-editor");
+        unsafe {
+            match prev_visual {
+                Some(v) => env::set_var("VISUAL", v),
+                None => env::remove_var("VISUAL"),
+            }
+            match prev_editor {
+                Some(v) => env::set_var("EDITOR", v),
+                None => env::remove_var("EDITOR"),
+            }
+        }
+    }
+
+    #[test]
+    fn detect_editor_falls_back_to_command_v_chain_when_no_env_set() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let prev_visual = env::var("VISUAL").ok();
+        let prev_editor = env::var("EDITOR").ok();
+        unsafe {
+            env::remove_var("VISUAL");
+            env::remove_var("EDITOR");
+        }
+        // On any reasonable dev/CI box at least one of nvim/vim/vi/nano is
+        // present; the function must return one of those (or "vi" as the
+        // hard-coded last resort).
+        let editor = detect_editor();
+        assert!(
+            ["nvim", "vim", "vi", "nano"].contains(&editor.as_str()),
+            "unexpected fallback editor: {editor}"
+        );
+        unsafe {
+            match prev_visual {
+                Some(v) => env::set_var("VISUAL", v),
+                None => env::remove_var("VISUAL"),
+            }
+            match prev_editor {
+                Some(v) => env::set_var("EDITOR", v),
+                None => env::remove_var("EDITOR"),
+            }
+        }
+    }
+
+    #[test]
+    fn detect_editor_falls_back_to_editor_var() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let prev_visual = env::var("VISUAL").ok();
+        let prev_editor = env::var("EDITOR").ok();
+        unsafe {
+            env::remove_var("VISUAL");
+            env::set_var("EDITOR", "fallback-editor");
+        }
+        assert_eq!(detect_editor(), "fallback-editor");
+        unsafe {
+            match prev_visual {
+                Some(v) => env::set_var("VISUAL", v),
+                None => env::remove_var("VISUAL"),
+            }
+            match prev_editor {
+                Some(v) => env::set_var("EDITOR", v),
+                None => env::remove_var("EDITOR"),
+            }
+        }
+    }
+
+    // ---- ensure_profiles_file ----
+
+    #[test]
+    fn ensure_profiles_file_is_noop_when_present() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("profiles.json");
+        fs::write(&path, "{\"profiles\":[]}").unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        ensure_profiles_file(&path).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn ensure_profiles_file_creates_default_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("profiles.json");
+        assert!(!path.exists());
+        ensure_profiles_file(&path).unwrap();
+        assert!(path.exists());
+        // The created file must round-trip into a Config.
+        let cfg = crate::config::load_config_at(&path).unwrap();
+        assert!(cfg.profiles.is_empty());
+    }
 }

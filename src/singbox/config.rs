@@ -1261,4 +1261,195 @@ mod tests {
             "quad9"
         );
     }
+
+    // ---- Iran routing modes (previously only Ru/Cn covered) ----
+
+    #[test]
+    fn build_route_bypass_ir_has_private_rule_and_final_proxy() {
+        let (route, rule_sets) = build_route(
+            &RoutingMode::BypassIr,
+            &dns_default(),
+            &GeoAvailability::all(),
+        );
+        let rules = route["rules"].as_array().unwrap();
+        assert!(rules.len() >= 4);
+        assert_eq!(route["final"], "proxy");
+        // BypassIr with geo data must register both geoip-ir and geosite-category-ir.
+        let tags: Vec<&str> = rule_sets
+            .iter()
+            .map(|rs| rs["tag"].as_str().unwrap())
+            .collect();
+        assert!(tags.contains(&"geoip-ir"));
+        assert!(tags.contains(&"geosite-category-ir"));
+    }
+
+    #[test]
+    fn build_route_only_ir_has_private_rule_and_final_direct() {
+        let (route, rule_sets) = build_route(
+            &RoutingMode::OnlyIr,
+            &dns_default(),
+            &GeoAvailability::all(),
+        );
+        let rules = route["rules"].as_array().unwrap();
+        assert!(rules.len() >= 4);
+        assert_eq!(route["final"], "direct");
+        assert_eq!(rule_sets.len(), 2);
+    }
+
+    #[test]
+    fn build_route_bypass_ru_has_private_rule_and_final_proxy() {
+        // Only the OnlyRu variant was tested explicitly; Bypass had no direct test.
+        let (route, rule_sets) = build_route(
+            &RoutingMode::BypassRu,
+            &dns_default(),
+            &GeoAvailability::all(),
+        );
+        assert_eq!(route["final"], "proxy");
+        assert_eq!(rule_sets.len(), 2);
+    }
+
+    // ---- Geo availability missing: rule_sets must stay empty ----
+
+    #[test]
+    fn build_route_bypass_ru_without_geo_emits_no_rule_sets() {
+        let (_route, rule_sets) = build_route(
+            &RoutingMode::BypassRu,
+            &dns_default(),
+            &GeoAvailability::default(),
+        );
+        assert!(rule_sets.is_empty());
+    }
+
+    #[test]
+    fn build_route_only_cn_without_geo_emits_no_rule_sets() {
+        let (_route, rule_sets) = build_route(
+            &RoutingMode::OnlyCn,
+            &dns_default(),
+            &GeoAvailability::default(),
+        );
+        assert!(rule_sets.is_empty());
+    }
+
+    #[test]
+    fn build_route_bypass_ir_without_geo_emits_no_rule_sets() {
+        let (_route, rule_sets) = build_route(
+            &RoutingMode::BypassIr,
+            &dns_default(),
+            &GeoAvailability::default(),
+        );
+        assert!(rule_sets.is_empty());
+    }
+
+    #[test]
+    fn build_route_only_ir_without_geo_emits_no_rule_sets() {
+        let (_route, rule_sets) = build_route(
+            &RoutingMode::OnlyIr,
+            &dns_default(),
+            &GeoAvailability::default(),
+        );
+        assert!(rule_sets.is_empty());
+    }
+
+    // ---- build_dns_server for every variant ----
+
+    #[test]
+    fn build_dns_server_emits_local_shape() {
+        let v = build_dns_server(&DnsServer::Local {
+            tag: "loc".to_string(),
+        });
+        assert_eq!(v["tag"], "loc");
+        assert_eq!(v["type"], "local");
+    }
+
+    #[test]
+    fn build_dns_server_emits_udp_and_tcp_with_optional_port() {
+        let udp = build_dns_server(&DnsServer::Udp {
+            tag: "u".to_string(),
+            server: "1.1.1.1".to_string(),
+            server_port: Some(53),
+        });
+        assert_eq!(udp["type"], "udp");
+        assert_eq!(udp["server_port"], 53);
+        let udp_no_port = build_dns_server(&DnsServer::Udp {
+            tag: "u".to_string(),
+            server: "1.1.1.1".to_string(),
+            server_port: None,
+        });
+        assert!(udp_no_port.get("server_port").is_none());
+
+        let tcp = build_dns_server(&DnsServer::Tcp {
+            tag: "t".to_string(),
+            server: "1.1.1.1".to_string(),
+            server_port: None,
+        });
+        assert_eq!(tcp["type"], "tcp");
+    }
+
+    #[test]
+    fn build_dns_server_emits_quic_shape() {
+        let v = build_dns_server(&DnsServer::Quic {
+            tag: "q".to_string(),
+            server: "9.9.9.9".to_string(),
+            server_port: Some(853),
+        });
+        assert_eq!(v["type"], "quic");
+        assert_eq!(v["server_port"], 853);
+    }
+
+    #[test]
+    fn build_dns_server_emits_fakeip_with_inet_ranges() {
+        let v = build_dns_server(&DnsServer::FakeIp {
+            tag: "fakeip".to_string(),
+            inet4_range: "198.18.0.0/15".to_string(),
+            inet6_range: "fc00::/18".to_string(),
+        });
+        assert_eq!(v["type"], "fakeip");
+        assert_eq!(v["inet4_range"], "198.18.0.0/15");
+        assert_eq!(v["inet6_range"], "fc00::/18");
+    }
+
+    // ---- build_dns_rule branches ----
+
+    #[test]
+    fn build_dns_rule_emits_only_populated_fields() {
+        let rule = DnsRule {
+            domain: vec!["a.example".to_string()],
+            server: "remote".to_string(),
+            ..DnsRule::default()
+        };
+        let v = build_dns_rule(&rule);
+        assert!(v.get("domain").is_some());
+        assert!(v.get("domain_suffix").is_none());
+        assert!(v.get("domain_keyword").is_none());
+        assert!(v.get("domain_regex").is_none());
+        assert!(v.get("rule_set").is_none());
+        assert_eq!(v["server"], "remote");
+    }
+
+    #[test]
+    fn build_dns_rule_includes_domain_keyword_regex_and_ruleset() {
+        let rule = DnsRule {
+            domain_keyword: vec!["youtube".to_string()],
+            domain_regex: vec!["^ads\\.".to_string()],
+            rule_set: vec!["geosite-ads".to_string()],
+            server: "remote".to_string(),
+            ..DnsRule::default()
+        };
+        let v = build_dns_rule(&rule);
+        assert_eq!(v["domain_keyword"], json!(["youtube"]));
+        assert_eq!(v["domain_regex"], json!(["^ads\\."]));
+        assert_eq!(v["rule_set"], json!(["geosite-ads"]));
+    }
+
+    #[test]
+    fn build_dns_rule_emits_disable_cache_when_set() {
+        let rule = DnsRule {
+            domain: vec!["x.test".to_string()],
+            server: "remote".to_string(),
+            disable_cache: true,
+            ..DnsRule::default()
+        };
+        let v = build_dns_rule(&rule);
+        assert_eq!(v["disable_cache"], true);
+    }
 }

@@ -275,4 +275,39 @@ mod tests {
         StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);
         insta::assert_snapshot!(buffer_to_string(&buf));
     }
+
+    /// `Connecting` falls through the status-bar match to `[DISCONNECTED]`
+    /// (only `Connected` and `ConnectPending` get explicit labels). Pin this
+    /// so the fall-through stays intentional — if a future patch wants to
+    /// show `[CONNECTING]` here, this snapshot will fail and force review.
+    #[test]
+    fn status_bar_connecting_snapshot() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        model.connection = ConnectionState::Connecting;
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
+        StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);
+        insta::assert_snapshot!(buffer_to_string(&buf));
+    }
+
+    /// `ConnectPending` is the only state that renders `[CONNECTING]`.
+    #[test]
+    fn status_bar_connect_pending_snapshot() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        model.connection = ConnectionState::ConnectPending;
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 1));
+        StatusBar::new(&model).render(Rect::new(0, 0, 80, 1), &mut buf);
+        insta::assert_snapshot!(buffer_to_string(&buf));
+    }
 }

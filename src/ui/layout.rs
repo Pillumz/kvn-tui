@@ -1204,4 +1204,81 @@ mod tests {
         model.selected = 1;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
+
+    /// Empty Sources pane: pins the "No sources." placeholder at
+    /// `draw_sources` L402–405, which currently has no visual regression guard.
+    #[test]
+    fn draw_sources_empty_state_snapshot() {
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    /// Routing-mode overlay in Global region: `available_modes()` returns a
+    /// single entry, exercising the small-list rendering path.
+    #[test]
+    fn draw_routing_mode_overlay_global_snapshot() {
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model
+            .config
+            .settings
+            .geo_routing
+            .set_region(crate::config::profile::GeoRegion::Global);
+        model.overlay = Overlay::RoutingMode;
+        model.routing_selected = 0;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    /// Pin the `[error]`-prefixed log styling path at `draw_main` L80–86.
+    #[test]
+    fn draw_main_error_log_styling_snapshot() {
+        let mut model = model_with_profiles(vec![Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        )]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(model.config.profiles[0].id);
+        model.logs.push_back("normal info line".to_string());
+        model
+            .logs
+            .push_back("[error] sing-box exited with code 1".to_string());
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
+
+    /// Subscription rendered with a populated `last_updated` and a non-default
+    /// `auto_update` interval — covers the subscription-header formatting path
+    /// when `Every1d` is active.
+    #[test]
+    fn draw_sources_subscription_with_last_updated_snapshot() {
+        use crate::config::profile::{Subscription, SubscriptionAutoUpdate};
+        use chrono::TimeZone;
+        use uuid::Uuid;
+
+        let sub_id = Uuid::new_v4();
+        let mut profile = Profile::new_vless(
+            "Alpha".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        profile.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![profile]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        let last_updated = chrono::Local
+            .with_ymd_and_hms(2026, 6, 14, 9, 30, 0)
+            .unwrap();
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Example".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1d,
+            last_updated: Some(last_updated),
+        });
+        model.selected = 0;
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
+    }
 }

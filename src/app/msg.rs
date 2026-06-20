@@ -108,6 +108,78 @@ pub enum IpcCommand {
     Quit,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipc_error_display_joins_chain_with_colons() {
+        let err = IpcError {
+            chain: vec!["top".into(), "middle".into(), "root cause".into()],
+        };
+        assert_eq!(err.to_string(), "top: middle: root cause");
+    }
+
+    #[test]
+    fn ipc_error_display_single_element() {
+        let err = IpcError::new("only");
+        assert_eq!(err.to_string(), "only");
+    }
+
+    #[test]
+    fn ipc_error_display_empty_chain() {
+        let err = IpcError { chain: vec![] };
+        assert_eq!(err.to_string(), "");
+    }
+
+    #[test]
+    fn ipc_error_from_anyhow_captures_context_chain() {
+        let err: anyhow::Error = anyhow::anyhow!("inner").context("middle").context("top");
+        let ipc: IpcError = err.into();
+        assert!(ipc.chain.first().unwrap().contains("top"));
+        assert!(ipc.chain.last().unwrap().contains("inner"));
+        assert!(ipc.chain.len() >= 3);
+    }
+
+    #[test]
+    fn ipc_command_serde_roundtrip_each_variant() {
+        let cmds = vec![
+            IpcCommand::Attach,
+            IpcCommand::Detach,
+            IpcCommand::Key {
+                code: "Char".into(),
+                char: Some('a'),
+                ctrl: false,
+            },
+            IpcCommand::Paste {
+                text: "hello".into(),
+            },
+            IpcCommand::Copied {
+                name: "A".into(),
+                count: 2,
+            },
+            IpcCommand::ReloadConfig,
+            IpcCommand::Quit,
+        ];
+        for cmd in cmds {
+            let json = serde_json::to_string(&cmd).unwrap();
+            let back: IpcCommand = serde_json::from_str(&json).unwrap();
+            // Round-trip via Debug since IpcCommand isn't PartialEq.
+            assert_eq!(format!("{:?}", cmd), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn ipc_error_serde_roundtrip() {
+        let err = IpcError {
+            chain: vec!["a".into(), "b".into()],
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        let back: IpcError = serde_json::from_str(&json).unwrap();
+        assert_eq!(err, back);
+    }
+}
+
 /// State snapshot pushed from the daemon to TUI clients.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateSnapshot {

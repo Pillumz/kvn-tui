@@ -258,3 +258,240 @@ impl DnsConfig {
             .find(|s| s.tag() == self.final_server.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strategy_next_cycles_through_all_variants() {
+        assert_eq!(DnsStrategy::PreferIpv4.next(), DnsStrategy::PreferIpv6);
+        assert_eq!(DnsStrategy::PreferIpv6.next(), DnsStrategy::OnlyIpv4);
+        assert_eq!(DnsStrategy::OnlyIpv4.next(), DnsStrategy::OnlyIpv6);
+        assert_eq!(DnsStrategy::OnlyIpv6.next(), DnsStrategy::PreferIpv4);
+    }
+
+    #[test]
+    fn strategy_prev_cycles_through_all_variants() {
+        assert_eq!(DnsStrategy::PreferIpv4.prev(), DnsStrategy::OnlyIpv6);
+        assert_eq!(DnsStrategy::OnlyIpv6.prev(), DnsStrategy::OnlyIpv4);
+        assert_eq!(DnsStrategy::OnlyIpv4.prev(), DnsStrategy::PreferIpv6);
+        assert_eq!(DnsStrategy::PreferIpv6.prev(), DnsStrategy::PreferIpv4);
+    }
+
+    #[test]
+    fn strategy_as_str_uses_singbox_wire_format() {
+        assert_eq!(DnsStrategy::PreferIpv4.as_str(), "prefer_ipv4");
+        assert_eq!(DnsStrategy::PreferIpv6.as_str(), "prefer_ipv6");
+        assert_eq!(DnsStrategy::OnlyIpv4.as_str(), "ipv4_only");
+        assert_eq!(DnsStrategy::OnlyIpv6.as_str(), "ipv6_only");
+    }
+
+    #[test]
+    fn strategy_serde_roundtrip() {
+        for s in [
+            DnsStrategy::PreferIpv4,
+            DnsStrategy::PreferIpv6,
+            DnsStrategy::OnlyIpv4,
+            DnsStrategy::OnlyIpv6,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: DnsStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn server_tag_and_kind_label_for_each_variant() {
+        let servers = [
+            DnsServer::Local { tag: "l".into() },
+            DnsServer::Udp {
+                tag: "u".into(),
+                server: "1.1.1.1".into(),
+                server_port: None,
+            },
+            DnsServer::Tcp {
+                tag: "t".into(),
+                server: "1.1.1.1".into(),
+                server_port: Some(53),
+            },
+            DnsServer::Tls {
+                tag: "dot".into(),
+                server: "1.1.1.1".into(),
+                server_port: Some(853),
+            },
+            DnsServer::Https {
+                tag: "doh".into(),
+                server: "1.1.1.1".into(),
+                server_port: None,
+                path: "/dns-query".into(),
+            },
+            DnsServer::Quic {
+                tag: "doq".into(),
+                server: "1.1.1.1".into(),
+                server_port: None,
+            },
+            DnsServer::FakeIp {
+                tag: "fakeip".into(),
+                inet4_range: "198.18.0.0/15".into(),
+                inet6_range: "fc00::/18".into(),
+            },
+        ];
+        let labels: Vec<&'static str> = servers.iter().map(|s| s.kind_label()).collect();
+        assert_eq!(
+            labels,
+            vec!["local", "UDP", "TCP", "DoT", "DoH", "DoQ", "fakeip"]
+        );
+        let tags: Vec<&str> = servers.iter().map(|s| s.tag()).collect();
+        assert_eq!(tags, vec!["l", "u", "t", "dot", "doh", "doq", "fakeip"]);
+    }
+
+    #[test]
+    fn server_serde_roundtrip_each_variant() {
+        let servers = vec![
+            DnsServer::Local { tag: "l".into() },
+            DnsServer::Tls {
+                tag: "dot".into(),
+                server: "8.8.8.8".into(),
+                server_port: Some(853),
+            },
+            DnsServer::Https {
+                tag: "doh".into(),
+                server: "1.1.1.1".into(),
+                server_port: None,
+                path: "/dns-query".into(),
+            },
+            DnsServer::FakeIp {
+                tag: "fakeip".into(),
+                inet4_range: "198.18.0.0/15".into(),
+                inet6_range: "fc00::/18".into(),
+            },
+        ];
+        for s in servers {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: DnsServer = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn dns_config_default_is_cloudflare_doh() {
+        let cfg = DnsConfig::default();
+        assert_eq!(cfg.final_server, "remote");
+        assert!(matches!(cfg.strategy, DnsStrategy::PreferIpv4));
+        assert!(!cfg.fakeip_enabled);
+        assert_eq!(cfg.servers.len(), 2);
+        let final_entry = cfg.final_server_entry().unwrap();
+        assert!(matches!(
+            final_entry,
+            DnsServer::Https { server, .. } if server == "1.1.1.1"
+        ));
+    }
+
+    #[test]
+    fn fakeip_server_returns_first_match() {
+        let mut cfg = DnsConfig::default();
+        assert!(cfg.fakeip_server().is_none());
+        cfg.servers.push(DnsServer::FakeIp {
+            tag: "fakeip".into(),
+            inet4_range: "198.18.0.0/15".into(),
+            inet6_range: "fc00::/18".into(),
+        });
+        assert!(cfg.fakeip_server().is_some());
+    }
+
+    #[test]
+    fn validate_rejects_empty_tag() {
+        let mut cfg = DnsConfig::default();
+        cfg.servers.push(DnsServer::Local { tag: "  ".into() });
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("must not be empty"));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_tags() {
+        let mut cfg = DnsConfig::default();
+        cfg.servers.push(DnsServer::Local {
+            tag: "remote".into(),
+        });
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_final_server() {
+        let cfg = DnsConfig {
+            final_server: "nope".into(),
+            ..DnsConfig::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("final_server"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_rule_server() {
+        let mut cfg = DnsConfig::default();
+        cfg.rules.push(DnsRule {
+            server: "missing".into(),
+            ..Default::default()
+        });
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("rules"));
+    }
+
+    #[test]
+    fn validate_rejects_fakeip_enabled_without_server() {
+        let cfg = DnsConfig {
+            fakeip_enabled: true,
+            ..DnsConfig::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("fakeip"));
+    }
+
+    #[test]
+    fn validate_accepts_default() {
+        DnsConfig::default().validate().unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_fakeip_when_server_present() {
+        let mut cfg = DnsConfig {
+            fakeip_enabled: true,
+            ..DnsConfig::default()
+        };
+        cfg.servers.push(DnsServer::FakeIp {
+            tag: "fakeip".into(),
+            inet4_range: "198.18.0.0/15".into(),
+            inet6_range: "fc00::/18".into(),
+        });
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn doh_path_default_applied_on_deserialize() {
+        let json = r#"{"type":"https","tag":"doh","server":"1.1.1.1"}"#;
+        let s: DnsServer = serde_json::from_str(json).unwrap();
+        match s {
+            DnsServer::Https { path, .. } => assert_eq!(path, "/dns-query"),
+            _ => panic!("expected Https"),
+        }
+    }
+
+    #[test]
+    fn fakeip_ranges_default_applied_on_deserialize() {
+        let json = r#"{"type":"fake_ip","tag":"fakeip"}"#;
+        let s: DnsServer = serde_json::from_str(json).unwrap();
+        match s {
+            DnsServer::FakeIp {
+                inet4_range,
+                inet6_range,
+                ..
+            } => {
+                assert_eq!(inet4_range, "198.18.0.0/15");
+                assert_eq!(inet6_range, "fc00::/18");
+            }
+            _ => panic!("expected FakeIp"),
+        }
+    }
+}

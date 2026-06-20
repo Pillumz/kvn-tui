@@ -190,4 +190,84 @@ mod tests {
         // Clean up
         let _ = fs::remove_file(&path);
     }
+
+    #[test]
+    fn collect_geo_availability_is_empty_when_no_files() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let geo = collect_geo_availability();
+        assert!(geo.ru.is_none());
+        assert!(geo.cn.is_none());
+        assert!(geo.ir.is_none());
+    }
+
+    #[test]
+    fn collect_geo_availability_populates_each_region_independently() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = crate::infra::geo::GeoManager::new().unwrap();
+
+        // Only RU files present.
+        let (geoip_ru, geosite_ru) = gm.local_paths();
+        fs::write(&geoip_ru, b"x").unwrap();
+        fs::write(&geosite_ru, b"x").unwrap();
+        let geo = collect_geo_availability();
+        assert!(geo.ru.is_some());
+        assert!(geo.cn.is_none());
+        assert!(geo.ir.is_none());
+
+        // Add CN.
+        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
+        fs::write(&geoip_cn, b"x").unwrap();
+        fs::write(&geosite_cn, b"x").unwrap();
+        let geo = collect_geo_availability();
+        assert!(geo.ru.is_some());
+        assert!(geo.cn.is_some());
+        assert!(geo.ir.is_none());
+
+        // Add IR.
+        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
+        fs::write(&geoip_ir, b"x").unwrap();
+        fs::write(&geosite_ir, b"x").unwrap();
+        let geo = collect_geo_availability();
+        assert!(geo.ru.is_some());
+        assert!(geo.cn.is_some());
+        assert!(geo.ir.is_some());
+    }
+
+    #[test]
+    fn collect_geo_availability_skips_region_when_only_one_file_present() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = crate::infra::geo::GeoManager::new().unwrap();
+        let (geoip_ru, _) = gm.local_paths();
+        fs::write(&geoip_ru, b"x").unwrap();
+        // geosite missing → ru must stay None.
+        let geo = collect_geo_availability();
+        assert!(geo.ru.is_none());
+    }
+
+    /// Validation against the real `sing-box` binary. Skipped automatically
+    /// when the binary is not on PATH so CI without sing-box stays green.
+    #[test]
+    fn check_config_accepts_a_minimal_profile() {
+        if Command::new("sh")
+            .args(["-c", "command -v sing-box >/dev/null 2>&1"])
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            eprintln!("skipping: sing-box not on PATH");
+            return;
+        }
+        let profile =
+            Profile::new_vless("T".to_string(), "1.1.1.1".to_string(), 443, "u".to_string());
+        let settings = Settings::default();
+        let path = write_config(&profile, &settings, &GeoAvailability::default()).unwrap();
+        check_config(&path).expect("sing-box rejected a minimal vless profile");
+        let _ = fs::remove_file(&path);
+    }
 }
