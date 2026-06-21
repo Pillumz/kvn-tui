@@ -454,10 +454,11 @@ pub enum SocksVersion {
 
 /// VLESS-specific profile configuration.
 ///
-/// TLS-related fields (`security`, `reality`, `fingerprint`) and transport
-/// fields are kept flat at the same JSON level as the outer [`Profile`] for
-/// backward compatibility with existing `profiles.json` files predating the
-/// `ProtocolConfig` refactor.
+/// TLS parameters live on the shared [`TlsCommon`] via `#[serde(flatten)]`,
+/// so legacy `profiles.json` entries with top-level `reality`/`ech` keys
+/// deserialize directly into `tls.reality` / `tls.ech` (same wire shape).
+/// The pre-v2 top-level `fingerprint` key needs explicit migration into
+/// `tls.utls_fingerprint`; see [`Config::migrate`] (`migrate_v1_to_v2`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct VlessConfig {
     pub uuid: String,
@@ -466,15 +467,16 @@ pub struct VlessConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<Security>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reality: Option<RealitySettings>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport_type: Option<TransportType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport_service_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ech: Option<EchSettings>,
+    /// Pre-v2 alias of `tls.utls_fingerprint`. Read from the legacy JSON
+    /// key `"fingerprint"`, never written. `migrate_v1_to_v2` moves it
+    /// into `tls.utls_fingerprint` and clears this field.
+    #[serde(default, rename = "fingerprint", skip_serializing)]
+    pub legacy_fingerprint: Option<String>,
+    #[serde(default, flatten)]
+    pub tls: TlsCommon,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -664,9 +666,9 @@ impl ProtocolConfig {
                 if c.uuid.trim().is_empty() {
                     anyhow::bail!("vless.uuid must not be empty");
                 }
-                if c.reality.is_some() && c.ech.as_ref().is_some_and(|e| e.enabled) {
-                    anyhow::bail!("vless: reality and ech are mutually exclusive");
-                }
+                c.tls
+                    .validate()
+                    .map_err(|e| anyhow::anyhow!("vless: {e}"))?;
             }
             ProtocolConfig::Vmess(c) => {
                 if c.uuid.trim().is_empty() {
@@ -985,7 +987,7 @@ impl Default for Settings {
 
 /// Current schema version for `profiles.json`. Bumped on every breaking
 /// change to the persisted shape; new migrations go in `Config::migrate`.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 fn default_schema_version() -> u32 {
     // Files written before the version was introduced are treated as v0
@@ -1072,6 +1074,10 @@ impl Config {
             self.migrate_v0_to_v1();
             self.schema_version = 1;
         }
+        if self.schema_version == 1 {
+            self.migrate_v1_to_v2();
+            self.schema_version = 2;
+        }
         debug_assert_eq!(self.schema_version, CURRENT_SCHEMA_VERSION);
     }
 
@@ -1085,6 +1091,23 @@ impl Config {
         }
         // Keep both fields in sync going forward; `dns.strategy` is the source.
         self.settings.dns_strategy = self.settings.dns.strategy.clone();
+    }
+
+    /// v1 → v2: promote the legacy top-level VLESS `fingerprint` field into
+    /// `cfg.tls.utls_fingerprint`. The pre-v2 sibling fields `reality` and
+    /// `ech` already deserialize straight into `cfg.tls.*` via
+    /// `#[serde(flatten)]` (identical key names), so they need no code path
+    /// here. Idempotent: `.take()` clears the legacy slot on the first run.
+    fn migrate_v1_to_v2(&mut self) {
+        for profile in &mut self.profiles {
+            if let ProtocolConfig::Vless(cfg) = &mut profile.config {
+                if let Some(fp) = cfg.legacy_fingerprint.take()
+                    && cfg.tls.utls_fingerprint.is_none()
+                {
+                    cfg.tls.utls_fingerprint = Some(fp);
+                }
+            }
+        }
     }
 }
 
@@ -1204,11 +1227,12 @@ mod tests {
         assert_eq!(cfg.uuid, "uuid-here");
         assert!(cfg.flow.is_none());
         assert!(cfg.security.is_none());
-        assert!(cfg.reality.is_none());
+        assert!(cfg.tls.reality.is_none());
         assert!(cfg.transport_type.is_none());
         assert!(cfg.transport_service_name.is_none());
-        assert!(cfg.fingerprint.is_none());
-        assert!(cfg.ech.is_none());
+        assert!(cfg.tls.utls_fingerprint.is_none());
+        assert!(cfg.tls.ech.is_none());
+        assert!(cfg.legacy_fingerprint.is_none());
         assert!(p.tags.is_empty());
         assert_ne!(p.id, Uuid::nil());
     }
@@ -1310,7 +1334,7 @@ mod tests {
         );
         if let ProtocolConfig::Vless(ref mut cfg) = profile.config {
             cfg.security = Some(Security::Reality);
-            cfg.reality = Some(RealitySettings {
+            cfg.tls.reality = Some(RealitySettings {
                 public_key: "pk".to_string(),
                 short_id: "sid".to_string(),
                 server_name: "sni".to_string(),
@@ -1384,7 +1408,7 @@ mod tests {
         assert_eq!(p.name, "Minimal");
         let cfg = vless_cfg(&p);
         assert!(cfg.flow.is_none());
-        assert!(cfg.reality.is_none());
+        assert!(cfg.tls.reality.is_none());
         assert!(p.tags.is_empty());
     }
 
@@ -1473,8 +1497,8 @@ mod tests {
             "uuid".to_string(),
         );
         if let ProtocolConfig::Vless(ref mut cfg) = profile.config {
-            cfg.reality = Some(RealitySettings::default());
-            cfg.ech = Some(EchSettings {
+            cfg.tls.reality = Some(RealitySettings::default());
+            cfg.tls.ech = Some(EchSettings {
                 enabled: true,
                 config: Vec::new(),
             });
@@ -1482,7 +1506,7 @@ mod tests {
         config.profiles.push(profile);
         let err = config.validate().unwrap_err().to_string();
         assert!(
-            err.contains("reality and ech are mutually exclusive"),
+            err.contains("tls.reality and tls.ech are mutually exclusive"),
             "Error was: {}",
             err
         );
@@ -1511,7 +1535,7 @@ mod tests {
         let cfg = vless_cfg(&profile);
         assert_eq!(cfg.uuid, "671c62c7-6768-4b98-ac6b-572c9c707be0");
         assert!(cfg.security.is_some());
-        let reality = cfg.reality.as_ref().unwrap();
+        let reality = cfg.tls.reality.as_ref().unwrap();
         assert_eq!(
             reality.public_key,
             "0IO3LodsrMnhOWh4ogwgdVqYg30CS5-snhFMwldOuAQ"
@@ -1519,6 +1543,7 @@ mod tests {
         assert_eq!(reality.server_name, "google.com");
         assert_eq!(reality.short_id, "f04debc34cbc48a4");
         assert_eq!(reality.spider_x, "/");
+        assert_eq!(cfg.tls.utls_fingerprint.as_deref(), Some("chrome"));
     }
 
     #[test]
@@ -1530,9 +1555,9 @@ mod tests {
         assert_eq!(profile.name, "Name");
         let cfg = vless_cfg(&profile);
         assert_eq!(cfg.uuid, "uuid");
-        assert!(cfg.reality.is_none());
+        assert!(cfg.tls.reality.is_none());
         assert!(cfg.flow.is_none());
-        assert!(cfg.fingerprint.is_none());
+        assert!(cfg.tls.utls_fingerprint.is_none());
         assert!(cfg.transport_type.is_none());
     }
 
@@ -1550,7 +1575,7 @@ mod tests {
         let profile = parse_share_link(uri).unwrap();
         let cfg = vless_cfg(&profile);
         assert_eq!(cfg.security, Some(Security::Reality));
-        let reality = cfg.reality.as_ref().unwrap();
+        let reality = cfg.tls.reality.as_ref().unwrap();
         assert_eq!(reality.public_key, "pk123");
         assert_eq!(reality.server_name, "sni.test");
         assert!(reality.short_id.is_empty());
@@ -1562,44 +1587,64 @@ mod tests {
         let uri = "vless://uuid@1.2.3.4?pbk=k&spx=%2Fpath%2Fhere#N";
         let profile = parse_share_link(uri).unwrap();
         let cfg = vless_cfg(&profile);
-        assert_eq!(cfg.reality.as_ref().unwrap().spider_x, "/path/here");
+        assert_eq!(cfg.tls.reality.as_ref().unwrap().spider_x, "/path/here");
     }
 
     #[test]
     fn legacy_vless_json_deserializes_into_new_shape() {
-        // Old config files (pre-ProtocolConfig refactor) used the same flat
-        // layout we now keep on Vless variant via #[serde(flatten)]; ensure
-        // a snapshot of the historic shape parses cleanly.
+        // A pre-v2 profiles.json: top-level `reality` / `ech` / `fingerprint`
+        // alongside the new flat layout. `reality` and `ech` are picked up
+        // by `#[serde(flatten)] tls: TlsCommon` automatically; `fingerprint`
+        // is captured into `legacy_fingerprint` and promoted by migrate().
         let json = r#"{
-            "id": "550e8400-e29b-41d4-a716-446655440000",
-            "name": "Legacy",
-            "protocol": "vless",
-            "address": "1.1.1.1",
-            "port": 443,
-            "uuid": "legacy-uuid",
-            "flow": "xtls-rprx-vision",
-            "security": "reality",
-            "reality": {
-                "public_key": "pk",
-                "short_id": "sid",
-                "server_name": "sni",
-                "spider_x": "/"
-            },
-            "transport_type": "grpc",
-            "transport_service_name": "svc",
-            "fingerprint": "chrome",
-            "tags": ["legacy"]
+            "schema_version": 1,
+            "profiles": [{
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "name": "Legacy",
+                "protocol": "vless",
+                "address": "1.1.1.1",
+                "port": 443,
+                "uuid": "legacy-uuid",
+                "flow": "xtls-rprx-vision",
+                "security": "reality",
+                "reality": {
+                    "public_key": "pk",
+                    "short_id": "sid",
+                    "server_name": "sni",
+                    "spider_x": "/"
+                },
+                "ech": { "enabled": false },
+                "transport_type": "grpc",
+                "transport_service_name": "svc",
+                "fingerprint": "chrome",
+                "tags": ["legacy"]
+            }]
         }"#;
-        let p: Profile = serde_json::from_str(json).unwrap();
-        assert_eq!(p.protocol(), Protocol::Vless);
-        let cfg = vless_cfg(&p);
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        // Before migrate(): legacy_fingerprint holds the raw value, the new
+        // slot is still empty.
+        {
+            let cfg = vless_cfg(&config.profiles[0]);
+            assert_eq!(cfg.legacy_fingerprint.as_deref(), Some("chrome"));
+            assert!(cfg.tls.utls_fingerprint.is_none());
+            assert!(cfg.tls.reality.is_some(), "reality flattened through");
+            assert!(cfg.tls.ech.is_some(), "ech flattened through");
+        }
+        config.migrate();
+        assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+        let p = &config.profiles[0];
+        let cfg = vless_cfg(p);
         assert_eq!(cfg.uuid, "legacy-uuid");
         assert_eq!(cfg.flow, Some(Flow::XtlsRprxVision));
         assert_eq!(cfg.security, Some(Security::Reality));
-        assert!(cfg.reality.is_some());
+        assert!(cfg.tls.reality.is_some());
         assert_eq!(cfg.transport_type, Some(TransportType::Grpc));
         assert_eq!(cfg.transport_service_name.as_deref(), Some("svc"));
-        assert_eq!(cfg.fingerprint.as_deref(), Some("chrome"));
+        assert_eq!(cfg.tls.utls_fingerprint.as_deref(), Some("chrome"));
+        assert!(
+            cfg.legacy_fingerprint.is_none(),
+            "migration must clear the legacy slot"
+        );
         assert_eq!(p.tags, vec!["legacy".to_string()]);
     }
 
@@ -1946,8 +1991,8 @@ mod tests {
         };
         cfg.flow = Some(Flow::XtlsRprxVision);
         cfg.security = Some(Security::Reality);
-        cfg.fingerprint = Some("chrome".to_string());
-        cfg.reality = Some(RealitySettings {
+        cfg.tls.utls_fingerprint = Some("chrome".to_string());
+        cfg.tls.reality = Some(RealitySettings {
             public_key: "pbk-value".to_string(),
             short_id: "sid-value".to_string(),
             server_name: "rt.example".to_string(),
@@ -2349,5 +2394,148 @@ mod tests {
         assert_eq!(cfg.schema_version, after_first.schema_version);
         assert_eq!(cfg.settings.dns.strategy, after_first.settings.dns.strategy);
         assert_eq!(cfg.settings.dns_strategy, after_first.settings.dns_strategy);
+    }
+
+    fn vless_profile_with_legacy_fingerprint(fp: &str) -> Profile {
+        let mut p = Profile::new_vless(
+            "Legacy".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            "u".to_string(),
+        );
+        if let ProtocolConfig::Vless(ref mut cfg) = p.config {
+            cfg.legacy_fingerprint = Some(fp.to_string());
+        }
+        p
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_promotes_legacy_vless_fingerprint() {
+        let mut cfg = Config {
+            schema_version: 1,
+            ..Config::default()
+        };
+        cfg.profiles
+            .push(vless_profile_with_legacy_fingerprint("chrome"));
+        cfg.migrate();
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        let vc = vless_cfg(&cfg.profiles[0]);
+        assert_eq!(vc.tls.utls_fingerprint.as_deref(), Some("chrome"));
+        assert!(vc.legacy_fingerprint.is_none());
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_keeps_new_fingerprint_when_both_set() {
+        // If a future writer somehow produced both, the new slot wins
+        // (legacy is treated purely as a one-way input).
+        let mut cfg = Config {
+            schema_version: 1,
+            ..Config::default()
+        };
+        let mut p = vless_profile_with_legacy_fingerprint("legacy-fp");
+        if let ProtocolConfig::Vless(ref mut vc) = p.config {
+            vc.tls.utls_fingerprint = Some("new-fp".to_string());
+        }
+        cfg.profiles.push(p);
+        cfg.migrate();
+        let vc = vless_cfg(&cfg.profiles[0]);
+        assert_eq!(vc.tls.utls_fingerprint.as_deref(), Some("new-fp"));
+        assert!(vc.legacy_fingerprint.is_none());
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_is_idempotent() {
+        let mut cfg = Config {
+            schema_version: 1,
+            ..Config::default()
+        };
+        cfg.profiles
+            .push(vless_profile_with_legacy_fingerprint("chrome"));
+        cfg.migrate();
+        let first = cfg.clone();
+        cfg.migrate();
+        assert_eq!(cfg, first);
+    }
+
+    #[test]
+    fn migrate_v1_to_v2_noop_for_non_vless_profiles() {
+        let mut cfg = Config {
+            schema_version: 1,
+            ..Config::default()
+        };
+        cfg.profiles.push(Profile {
+            id: Uuid::new_v4(),
+            name: "VM".to_string(),
+            address: "1.1.1.1".to_string(),
+            port: 443,
+            config: ProtocolConfig::Vmess(VmessConfig {
+                uuid: "vm-uuid".to_string(),
+                ..VmessConfig::default()
+            }),
+            tags: Vec::new(),
+            subscription_id: None,
+        });
+        cfg.migrate();
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        // No panic, no mutation.
+    }
+
+    #[test]
+    fn migrate_chains_v0_through_v2() {
+        // schema_version=0 must arrive at v2 in a single migrate() call,
+        // running both v0→v1 and v1→v2 steps.
+        let mut cfg = Config {
+            schema_version: 0,
+            ..Config::default()
+        };
+        cfg.settings.dns_strategy = DnsStrategy::OnlyIpv6;
+        cfg.profiles
+            .push(vless_profile_with_legacy_fingerprint("chrome"));
+        cfg.migrate();
+        assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(cfg.settings.dns.strategy, DnsStrategy::OnlyIpv6);
+        let vc = vless_cfg(&cfg.profiles[0]);
+        assert_eq!(vc.tls.utls_fingerprint.as_deref(), Some("chrome"));
+    }
+
+    // ---- P0 regression: VLESS plain-TLS share links must preserve
+    // sni / alpn / insecure end-to-end.
+
+    #[test]
+    fn parse_vless_plain_tls_preserves_sni() {
+        let uri = "vless://uuid@1.2.3.4:443?security=tls&sni=cdn.example.com#X";
+        let p = parse_share_link(uri).unwrap();
+        let cfg = vless_cfg(&p);
+        assert_eq!(cfg.security, Some(Security::Tls));
+        assert_eq!(cfg.tls.server_name.as_deref(), Some("cdn.example.com"));
+        assert!(cfg.tls.reality.is_none());
+    }
+
+    #[test]
+    fn parse_vless_plain_tls_preserves_alpn_and_insecure() {
+        let uri = "vless://uuid@1.2.3.4:443?security=tls&alpn=h2,http/1.1&insecure=1&fp=chrome#X";
+        let p = parse_share_link(uri).unwrap();
+        let cfg = vless_cfg(&p);
+        assert_eq!(cfg.tls.alpn, vec!["h2".to_string(), "http/1.1".to_string()]);
+        assert!(cfg.tls.insecure);
+        assert_eq!(cfg.tls.utls_fingerprint.as_deref(), Some("chrome"));
+    }
+
+    #[test]
+    fn encode_vless_plain_tls_roundtrip() {
+        let mut p = Profile::new_vless(
+            "VLESS-TLS".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            "vless-uuid".to_string(),
+        );
+        if let ProtocolConfig::Vless(ref mut cfg) = p.config {
+            cfg.security = Some(Security::Tls);
+            cfg.tls.server_name = Some("cdn.example.com".to_string());
+            cfg.tls.alpn = vec!["h2".to_string(), "http/1.1".to_string()];
+            cfg.tls.insecure = true;
+            cfg.tls.utls_fingerprint = Some("chrome".to_string());
+        }
+        assert_roundtrip(p);
     }
 }

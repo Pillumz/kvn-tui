@@ -142,6 +142,10 @@ fn extract_tls_common_from_query(q: &std::collections::HashMap<String, String>) 
             server_name: q.get("sni").cloned().unwrap_or_default(),
             spider_x: q.get("spx").cloned().unwrap_or_default(),
         });
+        // sing-box honors `reality.server_name` exclusively when REALITY is
+        // enabled; keeping a duplicate in `tls.server_name` would break the
+        // encode→parse round-trip (one input `sni` becomes two destinations).
+        tls.server_name = None;
     }
     tls
 }
@@ -190,23 +194,15 @@ fn parse_vless(rest: &str) -> Result<Profile> {
             _ => None,
         };
     }
-    if let Some(fp) = query.get("fp") {
-        cfg.fingerprint = Some(fp.clone());
-    }
     if let Some(transport) = query.get("type") {
         cfg.transport_type = parse_transport_type(transport);
     }
     if let Some(service_name) = query.get("serviceName") {
         cfg.transport_service_name = Some(service_name.clone());
     }
-    if let Some(pbk) = query.get("pbk") {
-        cfg.reality = Some(RealitySettings {
-            public_key: pbk.clone(),
-            short_id: query.get("sid").cloned().unwrap_or_default(),
-            server_name: query.get("sni").cloned().unwrap_or_default(),
-            spider_x: query.get("spx").cloned().unwrap_or_default(),
-        });
-    }
+    // Shared with VMess/Trojan: handles sni / alpn / fp / insecure and
+    // routes pbk+sid+spx+sni into a `RealitySettings` block when present.
+    cfg.tls = extract_tls_common_from_query(&query);
 
     Ok(profile)
 }
@@ -830,13 +826,10 @@ fn encode_vless(profile: &Profile, cfg: &VlessConfig) -> String {
     if cfg.flow == Some(Flow::XtlsRprxVision) {
         pairs.push(("flow", "xtls-rprx-vision".to_string()));
     }
-    if cfg.reality.is_some() {
-        pairs.push(("security", "reality".to_string()));
-    } else if cfg.security == Some(Security::Tls) {
+    // `append_tls_common_query` already emits `security=reality` when
+    // `tls.reality` is set; only the plain-TLS case needs an explicit hint.
+    if cfg.tls.reality.is_none() && cfg.security == Some(Security::Tls) {
         pairs.push(("security", "tls".to_string()));
-    }
-    if let Some(fp) = &cfg.fingerprint {
-        pairs.push(("fp", fp.clone()));
     }
     if let Some(tt) = &cfg.transport_type {
         let kind = match tt {
@@ -849,18 +842,7 @@ fn encode_vless(profile: &Profile, cfg: &VlessConfig) -> String {
     if let Some(svc) = &cfg.transport_service_name {
         pairs.push(("serviceName", svc.clone()));
     }
-    if let Some(reality) = &cfg.reality {
-        if !reality.server_name.is_empty() {
-            pairs.push(("sni", reality.server_name.clone()));
-        }
-        pairs.push(("pbk", reality.public_key.clone()));
-        if !reality.short_id.is_empty() {
-            pairs.push(("sid", reality.short_id.clone()));
-        }
-        if !reality.spider_x.is_empty() {
-            pairs.push(("spx", reality.spider_x.clone()));
-        }
-    }
+    append_tls_common_query(&mut pairs, &cfg.tls);
     format!(
         "vless://{}@{}:{}{}{}",
         urlencoding::encode(&cfg.uuid),

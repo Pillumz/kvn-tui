@@ -97,37 +97,15 @@ fn transport_type_str(kind: &TransportType) -> &'static str {
 
 /// Build VLESS outbound with optional REALITY / XTLS Vision / ECH.
 pub(super) fn build_vless_outbound(profile: &Profile, cfg: &VlessConfig) -> anyhow::Result<Value> {
-    let tls = if let Some(ref reality) = cfg.reality {
-        let fingerprint = cfg.fingerprint.as_deref().unwrap_or("chrome");
-        json!({
-            "enabled": true,
-            "server_name": reality.server_name,
-            "utls": { "enabled": true, "fingerprint": fingerprint },
-            "reality": {
-                "enabled": true,
-                "public_key": reality.public_key,
-                "short_id": reality.short_id,
-            }
-        })
+    // REALITY requires a utls fingerprint to be useful; preserve the
+    // pre-v2 default of "chrome" when the profile didn't specify one.
+    let tls_input = if cfg.tls.reality.is_some() && cfg.tls.utls_fingerprint.is_none() {
+        let mut t = cfg.tls.clone();
+        t.utls_fingerprint = Some("chrome".to_string());
+        std::borrow::Cow::Owned(t)
     } else {
-        let mut tls = json!({
-            "enabled": true,
-            "server_name": profile.address,
-            "insecure": false
-        });
-        if let Some(fp) = cfg.fingerprint.as_deref() {
-            tls["utls"] = json!({ "enabled": true, "fingerprint": fp });
-        }
-        if let Some(ech) = cfg.ech.as_ref().filter(|e| e.enabled) {
-            let mut ech_block = json!({ "enabled": true });
-            if !ech.config.is_empty() {
-                ech_block["config"] = json!(ech.config);
-            }
-            tls["ech"] = ech_block;
-        }
-        tls
+        std::borrow::Cow::Borrowed(&cfg.tls)
     };
-
     let mut outbound = json!({
         "type": "vless",
         "tag": "proxy",
@@ -135,7 +113,7 @@ pub(super) fn build_vless_outbound(profile: &Profile, cfg: &VlessConfig) -> anyh
         "server_port": profile.port,
         "uuid": cfg.uuid,
         "packet_encoding": "xudp",
-        "tls": tls
+        "tls": build_tls_block(&profile.address, &[], tls_input.as_ref()),
     });
 
     if let Some(ref flow) = cfg.flow {

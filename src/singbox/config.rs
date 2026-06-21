@@ -353,14 +353,14 @@ mod tests {
         );
         if let ProtocolConfig::Vless(ref mut cfg) = p.config {
             cfg.security = Some(crate::config::profile::Security::Reality);
-            cfg.reality = Some(RealitySettings {
+            cfg.tls.reality = Some(RealitySettings {
                 public_key: "0IO3LodsrMnhOWh4ogwgdVqYg30CS5-snhFMwldOuAQ".to_string(),
                 short_id: "f04debc34cbc48a4".to_string(),
                 server_name: "google.com".to_string(),
                 spider_x: "/".to_string(),
             });
             cfg.transport_type = Some(TransportType::Grpc);
-            cfg.fingerprint = Some("chrome".to_string());
+            cfg.tls.utls_fingerprint = Some("chrome".to_string());
         }
         p
     }
@@ -465,8 +465,33 @@ mod tests {
         let tls = &outbound["tls"];
         assert_eq!(tls["enabled"], true);
         assert_eq!(tls["server_name"], "1.2.3.4");
-        assert_eq!(tls["insecure"], false);
+        // sing-box treats absent `insecure` as false; we now omit it when
+        // unset (shared shape with VMess/Trojan via `build_tls_block`).
+        assert!(
+            tls.get("insecure")
+                .is_none_or(|v| v.as_bool() == Some(false))
+        );
         assert!(tls.get("reality").is_none());
+    }
+
+    #[test]
+    fn vless_outbound_plain_tls_uses_custom_sni() {
+        // P0 regression: a profile with cfg.tls.server_name = Some("cdn...")
+        // must emit `tls.server_name == "cdn..."`, not profile.address.
+        let mut profile = Profile::new_vless(
+            "CDN".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            "uuid".to_string(),
+        );
+        vless_cfg_mut(&mut profile).tls.server_name = Some("cdn.example.com".to_string());
+        vless_cfg_mut(&mut profile).tls.alpn = vec!["h2".to_string()];
+        vless_cfg_mut(&mut profile).tls.insecure = true;
+        let outbound = build_vless_outbound(&profile, vless_cfg(&profile)).unwrap();
+        let tls = &outbound["tls"];
+        assert_eq!(tls["server_name"], "cdn.example.com");
+        assert_eq!(tls["alpn"], serde_json::json!(["h2"]));
+        assert_eq!(tls["insecure"], true);
     }
 
     #[test]
