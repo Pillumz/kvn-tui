@@ -14,6 +14,18 @@
 
 ---
 
+## Contents
+
+- [Features](#features)
+- [Supported Protocols](#supported-protocols)
+- [Technology Stack](#technology-stack)
+- [Platform Support](#platform-support)
+- [Installation (Arch Linux)](#installation-arch-linux)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+
+---
+
 ## Features
 
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
@@ -21,14 +33,12 @@
 - **One-click paste** — import share links for any supported protocol or subscription URLs directly from the Wayland clipboard
 - **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
-- **Geo region selection** — choose Russia, China, Iran, or Global on first launch; only relevant routing modes and geo databases are shown/downloaded
-- **Routing modes** — Global, Bypass RU, Only RU, Bypass CN, Only CN, Bypass IR, Only IR (powered by geoip/geosite rule-sets)
-- **Geo database updates** — download and update rule-sets from within the app
+- **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets in-app with `u`
 - **Kill switch** — block all outbound traffic if the VPN connection drops; toggled with `K`; powered by nftables + a systemd unit
 - **DNS configuration** — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle, fake-IP toggle (sing-box 1.12 API), plus custom servers and per-domain routing rules via `profiles.json`; opened with `D`
 - **Auto-connect** — automatically reconnect to the last used profile on startup
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
-- **Live logs** — tail sing-box output in a split-pane view
+- **Live logs** — split-pane view interleaves sing-box output with app events; both streams are also persisted to `sing-box.log` and `app.log` on disk
 - **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
 
 ---
@@ -65,16 +75,15 @@ Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the follow
 | HTTP client | [ureq](https://github.com/algesten/ureq) | Geo database downloads |
 | D-Bus integration | [zbus](https://docs.rs/zbus/latest/zbus/) | Suspend/resume detection via `systemd-logind` |
 | Logging | [tracing](https://github.com/tokio-rs/tracing) | Structured application logs |
-| Error handling | [anyhow](https://github.com/dtolnay/anyhow) + [thiserror](https://github.com/dtolnay/thiserror) | Ergonomic error propagation |
+| Error handling | [anyhow](https://github.com/dtolnay/anyhow) | Ergonomic error propagation |
 | Utilities | `uuid`, `chrono`, `url`, `urlencoding`, `dirs` | IDs, timestamps, URI parsing, XDG directories |
 
 ### Architecture Highlights
 
-- **Daemon + TUI client** — the application splits into a headless daemon (owns sing-box, config, and state) and a TUI client (renders UI and forwards input). They communicate over a Unix domain socket via NDJSON. Running `kvn-tui` auto-starts the daemon in the background if it is not already running.
-- **TEA (The Elm Architecture)** — the daemon's business logic is split into pure `Model` / `update` / `Effect` layers. `update.rs` is fully synchronous and side-effect-free, making it easy to unit-test.
-- **sing-box runner** — dynamically generates valid sing-box 1.12+ JSON configurations from profile data, validates them with `sing-box check`, and spawns the process with automatic crash detection.
-- **Background services** — event reader, ticker, suspend watcher, IPC server, and effect workers run in dedicated threads inside the daemon communicating through an `mpsc` channel. Log tailing and geo updates are driven by messages, not shared mutable state.
-- **Atomic config writes** — `profiles.json` is written to a temporary file and renamed to prevent corruption.
+- **Daemon + TUI client** — headless daemon owns sing-box and state, TUI is just a thin renderer; they talk NDJSON over a Unix socket, so re-running `kvn-tui` re-attaches without restarting sing-box.
+- **TEA (The Elm Architecture)** — pure `Model` / `update` / `Effect` layers; `update.rs` is fully synchronous and side-effect-free, making business logic trivial to unit-test.
+- **sing-box runner** — generates valid sing-box 1.12+ JSON from profile data, validates with `sing-box check`, and spawns the process with crash detection.
+- **Atomic config writes** — `profiles.json` is written to a temp file and renamed to prevent corruption.
 - **State I/O** — connection status and active profile are persisted to `state.json` for waybar integration and crash recovery.
 
 ---
@@ -226,7 +235,19 @@ kvn-tui
 > sudo setcap cap_net_admin,cap_net_raw+ep /usr/bin/sing-box
 > ```
 
+On first launch a modal overlay prompts you to pick a geo region (Russia, China, Iran, or Global). After that, the main UI opens with an empty profile list.
+
+Typical first connection:
+
+1. Copy a share link (`vless://`, `ss://`, `hysteria2://`, …) or a subscription URL to the clipboard.
+2. Press `p` to import it. Subscriptions appear as a header with profiles nested underneath; single share links become standalone profiles.
+3. Select a profile with `j` / `k` and press `Enter` to connect. The status bar shows `[CONNECTED]` and the traffic header starts ticking.
+
+Press `?` at any time to see the full key map.
+
 ### Default Key Bindings
+
+**Navigation**
 
 | Key | Action |
 |-----|--------|
@@ -234,22 +255,38 @@ kvn-tui
 | `k` / `↑` | Move up |
 | `g` | Go to first profile |
 | `G` | Go to last profile |
+
+**Profiles & subscriptions**
+
+| Key | Action |
+|-----|--------|
 | `Enter` | Connect to selected profile |
 | `p` | Paste share link or subscription URL from clipboard |
-| `y` | Yank selected profile as a share link (or subscription URL) to clipboard |
+| `y` | Yank selected profile as a share link (or subscription source URL) to clipboard |
 | `d` | Delete selected profile |
+| `e` | Open `profiles.json` in `$EDITOR` |
+| `u` | Update selected subscription or geoip/geosite databases |
+| `i` | Cycle subscription auto-update interval |
+
+**Connection & routing**
+
+| Key | Action |
+|-----|--------|
+| `r` | Reconnect |
+| `s` | Stop / disconnect |
 | `m` | Change routing mode |
 | `o` | Select geo region |
-| `u` | Update geoip/geosite databases |
-| `e` | Open `profiles.json` in `$EDITOR` |
 | `K` | Toggle kill switch |
 | `D` | DNS settings (presets, strategy, fake-IP) |
 | `a` | Toggle auto-connect |
-| `r` | Reconnect |
-| `s` | Stop / disconnect |
-| `q` / `Esc` | Detach TUI — daemon and sing-box keep running. If an overlay is open, closes the overlay first |
-| `Ctrl+C` | Quit — stop daemon and sing-box, then exit |
+
+**Application**
+
+| Key | Action |
+|-----|--------|
 | `?` | Show help |
+| `q` / `Esc` | Detach TUI — daemon and sing-box keep running; closes the active overlay first if one is open |
+| `Ctrl+C` | Quit — stop daemon and sing-box, then exit |
 
 ---
 
@@ -263,15 +300,7 @@ Configuration is stored in:
 
 The file contains your profile list and application settings (default profile, TUN interface name, DNS configuration, routing mode, auto-connect, geo region). You can edit it manually with the `e` keybinding or any text editor.
 
-`settings.dns` controls how sing-box resolves names. It maps directly onto sing-box 1.12 DNS schema:
-
-- `dns.servers` — list of upstream servers (`local`, `udp`, `tcp`, `tls` / DoT, `https` / DoH, `quic` / DoQ, `fakeip`)
-- `dns.rules` — per-domain routing (`domain`, `domain_suffix`, `domain_keyword`, `domain_regex`, `rule_set`) targeting a specific server tag
-- `dns.final_server` — fallback server tag when no rule matches
-- `dns.strategy` — `prefer_ipv4` / `prefer_ipv6` / `ipv4_only` / `ipv6_only`
-- `dns.fakeip_enabled` — when true, an `A`/`AAAA` rule is auto-routed to the `fakeip` server, `dns.independent_cache` is enabled, and `experimental.cache_file.store_fakeip` persists the IP→domain map across restarts
-
-The `D` overlay in the TUI exposes built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), a strategy cycle (`h` / `l` preview, Enter to apply), and the fake-IP toggle. Custom servers and per-domain rules are edited by hand in `profiles.json` via the `e` keybinding.
+`settings.dns` maps directly onto the sing-box 1.12 DNS schema (`servers`, `rules`, `final_server`, `strategy`, `fakeip_enabled`). The `D` overlay covers the common cases — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle (`h` / `l` to preview, `Enter` to apply), and the fake-IP toggle. For custom upstreams or per-domain routing rules, edit `profiles.json` via `e`.
 
 When `auto_connect` is enabled, the application stores `last_connected_profile` and automatically connects to that profile on the next startup.
 
@@ -289,21 +318,14 @@ Geo rule-set databases are cached in:
 ~/.config/kvn-tui/geo/
 ```
 
-Logs (both sing-box output and app status messages) are written to:
+Logs are split across two files in:
 
 ```
-~/.config/kvn-tui/logs/sing-box.log
+~/.config/kvn-tui/logs/
 ```
 
----
-
-## Roadmap to v1.0.0
-
-- ~~**Kill switch support** — block all outbound traffic if the VPN connection drops unexpectedly~~ ✅ Done
-- ~~**DNS configuration** — custom DNS servers, routing rules, and strategy settings (e.g., DoH, DoT, fake-ip)~~ ✅ Done
-- ~~**All sing-box protocols** — extend beyond VLESS to support Shadowsocks, Trojan, VMess, Hysteria 2, and any other protocol sing-box supports~~ ✅ Done
-- ~~**Traffic statistics** — live bandwidth and connection stats in the TUI~~ ✅ Done
-- ~~**Export profiles** — export profiles to shareable links~~ ✅ Done
+- `sing-box.log` — raw sing-box stdout/stderr (the live log pane tails this file)
+- `app.log` — daemon and TUI client status messages, errors, and lifecycle events
 
 ---
 
