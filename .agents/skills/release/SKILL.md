@@ -1,6 +1,6 @@
 ---
 name: release
-description: 'Release workflow for kvn-tui: bump version in Cargo.toml, PKGBUILD, AGENTS.md, regenerate Cargo.lock, commit, and tag.'
+description: 'Release workflow for kvn-tui: bump version in Cargo.toml and PKGBUILD, regenerate Cargo.lock, commit, and tag.'
 ---
 
 ### Triggers
@@ -24,11 +24,10 @@ Activate this skill when the user says any of the following:
 3. **Update files** (replace the old version with the new one):
    - `Cargo.toml` — `version = "X.Y.Z"`
    - `pkg/arch/PKGBUILD` — `pkgver=X.Y.Z`
-   - `AGENTS.md` — update the version in the Project Overview line (e.g. `` `kvn-tui` (v0.6.2) ``)
 4. **Regenerate `Cargo.lock`** by running `cargo check`.
 5. **Stage changes:**
    ```bash
-   git add Cargo.toml Cargo.lock pkg/arch/PKGBUILD AGENTS.md
+   git add Cargo.toml Cargo.lock pkg/arch/PKGBUILD
    ```
 6. **Commit:**
    ```bash
