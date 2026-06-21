@@ -6,7 +6,7 @@
 [![Rust Version](https://img.shields.io/badge/rust-1.87%2B-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/github/license/yarikov/kvn-tui)](LICENSE)
 
-> Terminal VPN client for Arch Linux + Wayland with vim navigation.
+> Terminal VPN client for Arch Linux with vim navigation.
 
 `kvn-tui` is a keyboard-driven TUI application for managing VPN connections. It provides a fast, minimal interface for configuring profiles, connecting via the [sing-box](https://sing-box.sagernet.org/) backend, and routing traffic — all without leaving the terminal.
 
@@ -19,7 +19,6 @@
 - [Features](#features)
 - [Supported Protocols](#supported-protocols)
 - [Technology Stack](#technology-stack)
-- [Platform Support](#platform-support)
 - [Installation (Arch Linux)](#installation-arch-linux)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -30,7 +29,7 @@
 
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
 - **Profile management** — edit via `$EDITOR`, delete, and organize server profiles
-- **One-click paste** — import share links for any supported protocol or subscription URLs directly from the Wayland clipboard
+- **One-click paste** — import share links for any supported protocol or subscription URLs directly from the system clipboard
 - **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
 - **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets in-app with `u`
@@ -85,14 +84,6 @@ Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the follow
 - **sing-box runner** — generates valid sing-box 1.12+ JSON from profile data, validates with `sing-box check`, and spawns the process with crash detection.
 - **Atomic config writes** — `profiles.json` is written to a temp file and renamed to prevent corruption.
 - **State I/O** — connection status and active profile are persisted to `state.json` for waybar integration and crash recovery.
-
----
-
-## Platform Support
-
-> ⚠️ **Current version supports Arch Linux on Wayland only.**
-
-The application relies on Wayland-specific clipboard integration (`wl-paste`) and D-Bus/systemd-logind for power events. X11 support is not available at this time.
 
 ---
 

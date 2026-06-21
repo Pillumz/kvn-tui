@@ -2,12 +2,17 @@
 pkgname=kvn-tui
 pkgver=0.17.1
 pkgrel=1
-pkgdesc="Terminal VPN client for Arch Linux + Wayland with vim navigation"
+pkgdesc="Terminal VPN client for Arch Linux with vim navigation"
 arch=('x86_64')
 url="https://github.com/yarikov/kvn-tui"
 license=('MIT')
 install=kvn-tui.install
 depends=('gcc-libs' 'dbus' 'sing-box')
+optdepends=(
+    'wl-clipboard: clipboard integration on Wayland'
+    'xclip: clipboard integration on X11 (preferred)'
+    'xsel: clipboard integration on X11 (alternative)'
+)
 makedepends=('cargo' 'rust')
 # sing-box >= 1.12 required for valid config generation
 source=()

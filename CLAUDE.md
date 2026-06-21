@@ -30,4 +30,4 @@ See `AGENTS.md` for the full module map, design decisions, and coding convention
 
 **Config** — `~/.config/kvn-tui/profiles.json`. All writes must be atomic (write to `.tmp`, then `fs::rename`). See `config::save_config_at` for the pattern.
 
-**Platform** — Arch Linux + Wayland only. Clipboard uses `wl-paste`; suspend detection uses zbus/systemd-logind. Do not add X11 fallbacks.
+**Platform** — Arch Linux. Both Wayland and X11 are supported: the clipboard backend (`src/tui_client/clipboard.rs`) auto-detects `wl-clipboard` on Wayland and falls back to `xclip` or `xsel` on X11. Suspend detection uses zbus/systemd-logind and is display-server-agnostic.

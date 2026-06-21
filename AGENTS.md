@@ -6,7 +6,7 @@ This document contains project-specific context and conventions for AI coding ag
 
 ## Project Overview
 
-`kvn-tui` is a **terminal VPN client** for Arch Linux + Wayland. It is a Rust TUI application that manages VPN profiles, generates sing-box configurations, and orchestrates the `sing-box` binary as a child process. Navigation is vim-style (`j`/`k`/`g`/`G`).
+`kvn-tui` is a **terminal VPN client** for Arch Linux. It is a Rust TUI application that manages VPN profiles, generates sing-box configurations, and orchestrates the `sing-box` binary as a child process. Navigation is vim-style (`j`/`k`/`g`/`G`).
 
 The app does **not** implement VPN protocols itself. It is a configuration generator and process manager around the external `sing-box` binary.
 
@@ -36,7 +36,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `suspend` | `src/services/suspend.rs` | D-Bus listener for `systemd-logind` `PrepareForSleep` signals (zbus) |
 | `killswitch` | `src/services/killswitch.rs` | nftables helper integration: enable/disable systemd unit, pre-allow VPN handshake IPs, reconcile state on startup |
 | `services` | `src/services.rs`, `src/services/log_tailer.rs`, `src/services/waybar.rs`, `src/services/suspend.rs` | Background services: log tailer, waybar state I/O, suspend watcher (all run inside the daemon) |
-| `clipboard` | `src/tui_client/clipboard.rs` | Wayland clipboard integration (`wl-paste`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
+| `clipboard` | `src/tui_client/clipboard.rs` | System clipboard integration; auto-detects Wayland (`wl-paste` / `wl-copy`) or X11 (`xclip`, falls back to `xsel`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
 | `editor` | `src/tui_client/editor.rs` | Launch `$EDITOR` / `$VISUAL` on `profiles.json`, temporarily restore terminal |
 
 ---
@@ -75,10 +75,10 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 
 ## Platform Constraints
 
-**Arch Linux on Wayland only.** Do not add X11-specific clipboard tools or generic Linux abstractions without explicit user request.
+**Arch Linux.** Both Wayland and X11 sessions are supported. Do not add generic Linux abstractions (other distros, BSDs, …) without explicit user request.
 
-- Clipboard: hard dependency on `wl-paste`
-- Power events: listens to `org.freedesktop.login1.Manager.PrepareForSleep` via zbus
+- Clipboard: auto-detected at startup in `src/tui_client/clipboard.rs` — prefers `wl-paste` / `wl-copy` on Wayland, falls back to `xclip` then `xsel` on X11
+- Power events: listens to `org.freedesktop.login1.Manager.PrepareForSleep` via zbus (display-server-agnostic)
 - TUN interface: created by sing-box; requires root privileges
 
 ---
@@ -234,7 +234,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 
 ### Daemon + TUI Client Architecture
 - **Daemon** (`kvn-tui --daemon`) runs headless. It owns the sing-box process, config, geo updates, suspend/resume handling, and log tailing. It binds a Unix domain socket for IPC.
-- **TUI Client** (`kvn-tui`) connects to the daemon socket, requests a state snapshot (`Attach`), enters the alternate screen, and renders the UI. Keyboard input is forwarded to the daemon as `IpcCommand::Key` (except `p` and `e`, which are handled locally because they need terminal/Wayland access).
+- **TUI Client** (`kvn-tui`) connects to the daemon socket, requests a state snapshot (`Attach`), enters the alternate screen, and renders the UI. Keyboard input is forwarded to the daemon as `IpcCommand::Key` (except `p` and `e`, which are handled locally because they need terminal/clipboard access).
 - Pressing `q` (or `Esc`) when no overlay is shown sends `Detach` to the daemon, leaves the alternate screen, disables raw mode, and **exits the TUI process**. The daemon and sing-box keep running. Shell regains the prompt immediately because the foreground TUI process actually exits. If an overlay is open (Help, ConfirmDelete, RoutingMode, GeoRegions, Error), `q`/`Esc` is forwarded to the daemon as a normal key, which closes the overlay.
 - Pressing `Ctrl+C` sends `Quit` to the daemon. The daemon stops sing-box, cleans up the Unix socket, and exits. The TUI waits briefly (300 ms) for cleanup to complete before exiting.
 - Running `kvn-tui` again connects to the same daemon and re-attaches, restoring the TUI instantly without restarting sing-box.
@@ -292,6 +292,6 @@ If you need to add a new side effect from `update`, add a new `Effect` variant a
 1. Are you preserving atomic file writes for any new config files?
 2. Are you using `anyhow::Result` and `tracing` instead of `println!` / `eprintln!`?
 3. Are tests added for new public functions, and does `cargo llvm-cov --summary-only` still report **≥ 85 %** region and line coverage?
-4. Are you respecting the Arch + Wayland constraint (no X11 fallbacks added silently)?
+4. Are you respecting the Arch-only constraint (no support for other distros or BSDs added silently)?
 5. Does the sing-box config generation remain valid for sing-box 1.12+?
 6. Have you run `cargo fmt` and `cargo clippy --all-targets --all-features` and fixed any warnings?
