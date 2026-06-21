@@ -1050,3 +1050,106 @@ fn encode_shadowtls(profile: &Profile, cfg: &ShadowtlsConfig) -> String {
         fragment_for(&profile.name),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- decode_b64_lenient: accept all four base64 variants users find
+    // in the wild (Shadowsocks legacy, SIP002, VMess JSON payloads).
+
+    #[test]
+    fn decode_b64_lenient_accepts_url_safe_no_pad() {
+        // "hello" → aGVsbG8 (URL-safe, no padding)
+        let out = decode_b64_lenient("aGVsbG8").unwrap();
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn decode_b64_lenient_accepts_url_safe_padded() {
+        // "hello" → aGVsbG8= (URL-safe, padded)
+        let out = decode_b64_lenient("aGVsbG8=").unwrap();
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn decode_b64_lenient_accepts_standard_no_pad() {
+        // 0xFB,0xFF → +/8 (standard alphabet uses +/, URL-safe uses -_)
+        let out = decode_b64_lenient("+/8").unwrap();
+        assert_eq!(out, vec![0xFB, 0xFF]);
+    }
+
+    #[test]
+    fn decode_b64_lenient_accepts_standard_padded() {
+        let out = decode_b64_lenient("+/8=").unwrap();
+        assert_eq!(out, vec![0xFB, 0xFF]);
+    }
+
+    #[test]
+    fn decode_b64_lenient_strips_whitespace() {
+        // Wrapped base64 from email/Telegram pastes.
+        let out = decode_b64_lenient("aGVs\nbG8=\n").unwrap();
+        assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn decode_b64_lenient_rejects_garbage() {
+        // `!` is not in any base64 alphabet — must error, not panic.
+        assert!(decode_b64_lenient("not!!base64").is_err());
+    }
+
+    #[test]
+    fn decode_b64_lenient_empty_input_is_empty_output() {
+        assert_eq!(decode_b64_lenient("").unwrap(), Vec::<u8>::new());
+    }
+
+    // ---- parse_alpn: comma-separated list, trims whitespace, drops empties.
+
+    #[test]
+    fn parse_alpn_single_entry() {
+        assert_eq!(parse_alpn("h2"), vec!["h2".to_string()]);
+    }
+
+    #[test]
+    fn parse_alpn_multiple_entries() {
+        assert_eq!(
+            parse_alpn("h2,http/1.1"),
+            vec!["h2".to_string(), "http/1.1".to_string()],
+        );
+    }
+
+    #[test]
+    fn parse_alpn_trims_whitespace_around_entries() {
+        assert_eq!(
+            parse_alpn(" h2 , http/1.1 "),
+            vec!["h2".to_string(), "http/1.1".to_string()],
+        );
+    }
+
+    #[test]
+    fn parse_alpn_drops_empty_entries() {
+        // Trailing / repeated commas in user-pasted URIs.
+        assert_eq!(parse_alpn("h2,,"), vec!["h2".to_string()]);
+        assert_eq!(parse_alpn(""), Vec::<String>::new());
+    }
+
+    // ---- parse_bool_param: accept the wire values producers actually use.
+
+    #[test]
+    fn parse_bool_param_accepts_truthy_strings() {
+        assert!(parse_bool_param("1"));
+        assert!(parse_bool_param("true"));
+        assert!(parse_bool_param("yes"));
+    }
+
+    #[test]
+    fn parse_bool_param_rejects_other_values() {
+        assert!(!parse_bool_param("0"));
+        assert!(!parse_bool_param("false"));
+        assert!(!parse_bool_param("no"));
+        assert!(!parse_bool_param(""));
+        // Case-sensitive: producers normalise to lowercase.
+        assert!(!parse_bool_param("True"));
+        assert!(!parse_bool_param("YES"));
+    }
+}

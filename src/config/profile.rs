@@ -2538,4 +2538,70 @@ mod tests {
         }
         assert_roundtrip(p);
     }
+
+    // ---- Error-path coverage: malformed share links must surface as
+    // Result::Err rather than panic, and must not silently construct a
+    // profile with empty credentials. Closes the "user pasted a broken
+    // URI from a Telegram channel" gap that share_link.rs guards.
+
+    #[test]
+    fn parse_vmess_b64_rejects_invalid_base64() {
+        // `!` is outside every base64 alphabet.
+        assert!(parse_share_link("vmess://not!!base64").is_err());
+    }
+
+    #[test]
+    fn parse_vmess_b64_rejects_missing_id() {
+        use base64::Engine;
+        // Valid base64 + valid JSON, but no `id` field.
+        let json = r#"{"add":"1.1.1.1","port":443,"ps":"X"}"#;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+        let err = parse_share_link(&format!("vmess://{b64}"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing 'id'"), "Error was: {err}");
+    }
+
+    #[test]
+    fn parse_vmess_b64_rejects_missing_address() {
+        use base64::Engine;
+        let json = r#"{"port":443,"id":"u","ps":"X"}"#;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
+        let err = parse_share_link(&format!("vmess://{b64}"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing 'add'"), "Error was: {err}");
+    }
+
+    #[test]
+    fn parse_trojan_rejects_empty_password() {
+        assert!(parse_share_link("trojan://@trojan.example:443#X").is_err());
+    }
+
+    #[test]
+    fn parse_hysteria2_rejects_empty_password() {
+        assert!(parse_share_link("hysteria2://@hy.example:443#X").is_err());
+    }
+
+    #[test]
+    fn parse_tuic_rejects_missing_password() {
+        // `uuid:` with empty password.
+        assert!(parse_share_link("tuic://uuid:@tuic.example:443#X").is_err());
+    }
+
+    #[test]
+    fn parse_anytls_rejects_empty_password() {
+        assert!(parse_share_link("anytls://@a.example:443#X").is_err());
+    }
+
+    #[test]
+    fn parse_ssh_rejects_missing_user() {
+        assert!(parse_share_link("ssh://@ssh.example:22#X").is_err());
+    }
+
+    #[test]
+    fn parse_socks_rejects_missing_port() {
+        // socks5:// without an explicit port — there's no protocol default.
+        assert!(parse_share_link("socks5://user:pass@socks.example#X").is_err());
+    }
 }
