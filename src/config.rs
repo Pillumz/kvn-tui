@@ -90,7 +90,7 @@ mod tests {
         config
             .settings
             .geo_routing
-            .set_mode(profile::RoutingMode::OnlyRu);
+            .set_mode(profile::RoutingMode::Only(profile::GeoRegion::Ru));
         config.profiles.push(profile::Profile::new_vless(
             "Test".to_string(),
             "1.2.3.4".to_string(),

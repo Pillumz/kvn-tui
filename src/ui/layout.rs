@@ -240,7 +240,8 @@ fn draw_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
 /// Draw the routing mode selection modal.
 fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
     let modes = model.config.settings.geo_routing.available_modes();
-    let labels: Vec<&str> = modes.iter().map(|m| m.as_str()).collect();
+    let label_strings: Vec<String> = modes.iter().map(|m| m.to_string()).collect();
+    let labels: Vec<&str> = label_strings.iter().map(String::as_str).collect();
     let active = modes
         .iter()
         .position(|m| *m == model.config.settings.geo_routing.mode());
@@ -258,23 +259,21 @@ fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
 /// Draw the geo region selection modal.
 fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
     use crate::config::profile::GeoRegion;
+    // Labels are aligned 1:1 with `GeoRegion::ALL`. The debug_assert catches
+    // a missed entry when a new region is added.
     let labels = [
         "🇷🇺 Russia",
         "🇨🇳 China",
         "🇮🇷 Iran",
         "🌍 Global (no geo rules)",
     ];
+    debug_assert_eq!(labels.len(), GeoRegion::ALL.len());
     let active = model
         .config
         .settings
         .geo_routing
         .current_region
-        .map(|r| match r {
-            GeoRegion::Ru => 0,
-            GeoRegion::Cn => 1,
-            GeoRegion::Ir => 2,
-            GeoRegion::Global => 3,
-        });
+        .and_then(|r| GeoRegion::ALL.iter().position(|x| *x == r));
     draw_selection_modal(
         frame,
         area,

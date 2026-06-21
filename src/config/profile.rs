@@ -78,6 +78,16 @@ pub enum GeoRegion {
 }
 
 impl GeoRegion {
+    /// All regions in their canonical UI / cycle order. Single source of truth
+    /// for region listings — adding a country here propagates to overlays,
+    /// key navigation, and runner availability scans.
+    pub const ALL: [GeoRegion; 4] = [
+        GeoRegion::Ru,
+        GeoRegion::Cn,
+        GeoRegion::Ir,
+        GeoRegion::Global,
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             GeoRegion::Global => "global",
@@ -86,55 +96,86 @@ impl GeoRegion {
             GeoRegion::Ir => "ir",
         }
     }
+
+    /// Uppercase two-letter code used in user-facing labels ("Bypass RU").
+    pub fn code_upper(&self) -> &'static str {
+        match self {
+            GeoRegion::Global => "GLOBAL",
+            GeoRegion::Ru => "RU",
+            GeoRegion::Cn => "CN",
+            GeoRegion::Ir => "IR",
+        }
+    }
 }
 
-/// Routing mode for geoip/geosite rules.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+/// Routing mode for geoip/geosite rules. Generic over the active geo region so
+/// adding a country requires no new variants — `RoutingMode::Bypass(GeoRegion::Br)`
+/// just works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RoutingMode {
     #[default]
     Global,
-    BypassRu,
-    OnlyRu,
-    BypassCn,
-    OnlyCn,
-    BypassIr,
-    OnlyIr,
+    Bypass(GeoRegion),
+    Only(GeoRegion),
 }
 
 impl RoutingMode {
     /// Return the list of routing modes available for the given geo region.
     pub fn available(region: Option<GeoRegion>) -> Vec<RoutingMode> {
         match region {
-            Some(GeoRegion::Ru) => vec![
+            Some(r) if !matches!(r, GeoRegion::Global) => vec![
                 RoutingMode::Global,
-                RoutingMode::BypassRu,
-                RoutingMode::OnlyRu,
+                RoutingMode::Bypass(r),
+                RoutingMode::Only(r),
             ],
-            Some(GeoRegion::Cn) => vec![
-                RoutingMode::Global,
-                RoutingMode::BypassCn,
-                RoutingMode::OnlyCn,
-            ],
-            Some(GeoRegion::Ir) => vec![
-                RoutingMode::Global,
-                RoutingMode::BypassIr,
-                RoutingMode::OnlyIr,
-            ],
-            Some(GeoRegion::Global) | None => vec![RoutingMode::Global],
+            _ => vec![RoutingMode::Global],
         }
     }
+}
 
-    pub fn as_str(&self) -> &'static str {
+impl std::fmt::Display for RoutingMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RoutingMode::Global => "Global",
-            RoutingMode::BypassRu => "Bypass RU",
-            RoutingMode::OnlyRu => "Only RU",
-            RoutingMode::BypassCn => "Bypass CN",
-            RoutingMode::OnlyCn => "Only CN",
-            RoutingMode::BypassIr => "Bypass IR",
-            RoutingMode::OnlyIr => "Only IR",
+            RoutingMode::Global => f.write_str("Global"),
+            RoutingMode::Bypass(r) => write!(f, "Bypass {}", r.code_upper()),
+            RoutingMode::Only(r) => write!(f, "Only {}", r.code_upper()),
         }
+    }
+}
+
+// Custom (de)serialization preserves the legacy on-disk shape
+// ("global", "bypass_ru", "only_cn", ...) so existing profiles.json files load.
+impl Serialize for RoutingMode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RoutingMode::Global => s.serialize_str("global"),
+            RoutingMode::Bypass(r) => s.serialize_str(&format!("bypass_{}", r.as_str())),
+            RoutingMode::Only(r) => s.serialize_str(&format!("only_{}", r.as_str())),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RoutingMode {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let s = String::deserialize(d)?;
+        if s == "global" {
+            return Ok(RoutingMode::Global);
+        }
+        let parse_region = |code: &str| -> Option<GeoRegion> {
+            GeoRegion::ALL.iter().copied().find(|r| r.as_str() == code)
+        };
+        if let Some(code) = s.strip_prefix("bypass_") {
+            return parse_region(code).map(RoutingMode::Bypass).ok_or_else(|| {
+                D::Error::custom(format!("unknown region in routing mode `{}`", s))
+            });
+        }
+        if let Some(code) = s.strip_prefix("only_") {
+            return parse_region(code).map(RoutingMode::Only).ok_or_else(|| {
+                D::Error::custom(format!("unknown region in routing mode `{}`", s))
+            });
+        }
+        Err(D::Error::custom(format!("unknown routing mode `{}`", s)))
     }
 }
 
@@ -1057,14 +1098,14 @@ mod tests {
     }
 
     #[test]
-    fn routing_mode_as_str() {
-        assert_eq!(RoutingMode::Global.as_str(), "Global");
-        assert_eq!(RoutingMode::BypassRu.as_str(), "Bypass RU");
-        assert_eq!(RoutingMode::OnlyRu.as_str(), "Only RU");
-        assert_eq!(RoutingMode::BypassCn.as_str(), "Bypass CN");
-        assert_eq!(RoutingMode::OnlyCn.as_str(), "Only CN");
-        assert_eq!(RoutingMode::BypassIr.as_str(), "Bypass IR");
-        assert_eq!(RoutingMode::OnlyIr.as_str(), "Only IR");
+    fn routing_mode_display() {
+        assert_eq!(RoutingMode::Global.to_string(), "Global");
+        assert_eq!(RoutingMode::Bypass(GeoRegion::Ru).to_string(), "Bypass RU");
+        assert_eq!(RoutingMode::Only(GeoRegion::Ru).to_string(), "Only RU");
+        assert_eq!(RoutingMode::Bypass(GeoRegion::Cn).to_string(), "Bypass CN");
+        assert_eq!(RoutingMode::Only(GeoRegion::Cn).to_string(), "Only CN");
+        assert_eq!(RoutingMode::Bypass(GeoRegion::Ir).to_string(), "Bypass IR");
+        assert_eq!(RoutingMode::Only(GeoRegion::Ir).to_string(), "Only IR");
     }
 
     #[test]
@@ -1074,32 +1115,66 @@ mod tests {
     }
 
     #[test]
+    fn routing_mode_serde_round_trip_matches_legacy_wire_format() {
+        // Every variant maps to its on-disk string and back, preserving
+        // backward compatibility with profiles.json files written by builds
+        // that used the flat enum (`bypass_ru`, `only_cn`, etc.).
+        let cases: &[(RoutingMode, &str)] = &[
+            (RoutingMode::Global, r#""global""#),
+            (RoutingMode::Bypass(GeoRegion::Ru), r#""bypass_ru""#),
+            (RoutingMode::Only(GeoRegion::Ru), r#""only_ru""#),
+            (RoutingMode::Bypass(GeoRegion::Cn), r#""bypass_cn""#),
+            (RoutingMode::Only(GeoRegion::Cn), r#""only_cn""#),
+            (RoutingMode::Bypass(GeoRegion::Ir), r#""bypass_ir""#),
+            (RoutingMode::Only(GeoRegion::Ir), r#""only_ir""#),
+        ];
+        for (mode, wire) in cases {
+            assert_eq!(
+                serde_json::to_string(mode).unwrap(),
+                *wire,
+                "ser {:?}",
+                mode
+            );
+            let parsed: RoutingMode = serde_json::from_str(wire).unwrap();
+            assert_eq!(parsed, *mode, "de {}", wire);
+        }
+    }
+
+    #[test]
+    fn routing_mode_deserialize_rejects_unknown_strings() {
+        assert!(serde_json::from_str::<RoutingMode>(r#""bogus""#).is_err());
+        assert!(serde_json::from_str::<RoutingMode>(r#""bypass_xx""#).is_err());
+        assert!(serde_json::from_str::<RoutingMode>(r#""only_""#).is_err());
+    }
+
+    #[test]
+    fn geo_region_all_contains_every_variant() {
+        // Smoke test: GeoRegion::ALL must enumerate all enum variants.
+        // The match-statement below fails to compile if a variant is added
+        // to the enum without being listed in ALL.
+        for r in GeoRegion::ALL {
+            match r {
+                GeoRegion::Global | GeoRegion::Ru | GeoRegion::Cn | GeoRegion::Ir => {}
+            }
+        }
+        assert_eq!(GeoRegion::ALL.len(), 4);
+    }
+
+    #[test]
     fn routing_mode_available() {
         assert_eq!(RoutingMode::available(None), vec![RoutingMode::Global]);
-        assert_eq!(
-            RoutingMode::available(Some(GeoRegion::Ru)),
-            vec![
-                RoutingMode::Global,
-                RoutingMode::BypassRu,
-                RoutingMode::OnlyRu
-            ]
-        );
-        assert_eq!(
-            RoutingMode::available(Some(GeoRegion::Cn)),
-            vec![
-                RoutingMode::Global,
-                RoutingMode::BypassCn,
-                RoutingMode::OnlyCn
-            ]
-        );
-        assert_eq!(
-            RoutingMode::available(Some(GeoRegion::Ir)),
-            vec![
-                RoutingMode::Global,
-                RoutingMode::BypassIr,
-                RoutingMode::OnlyIr
-            ]
-        );
+        for region in [GeoRegion::Ru, GeoRegion::Cn, GeoRegion::Ir] {
+            assert_eq!(
+                RoutingMode::available(Some(region)),
+                vec![
+                    RoutingMode::Global,
+                    RoutingMode::Bypass(region),
+                    RoutingMode::Only(region),
+                ],
+                "region {:?}",
+                region,
+            );
+        }
         assert_eq!(
             RoutingMode::available(Some(GeoRegion::Global)),
             vec![RoutingMode::Global]
@@ -1162,18 +1237,18 @@ mod tests {
     fn geo_routing_set_mode_persists_per_region() {
         let mut g = GeoRouting::default();
         g.set_region(GeoRegion::Ru);
-        g.set_mode(RoutingMode::BypassRu);
-        assert_eq!(g.mode(), RoutingMode::BypassRu);
+        g.set_mode(RoutingMode::Bypass(GeoRegion::Ru));
+        assert_eq!(g.mode(), RoutingMode::Bypass(GeoRegion::Ru));
         assert_eq!(
             g.selected_region_modes.get(&GeoRegion::Ru),
-            Some(&RoutingMode::BypassRu)
+            Some(&RoutingMode::Bypass(GeoRegion::Ru))
         );
 
         g.set_region(GeoRegion::Cn);
-        g.set_mode(RoutingMode::OnlyCn);
-        assert_eq!(g.mode(), RoutingMode::OnlyCn);
+        g.set_mode(RoutingMode::Only(GeoRegion::Cn));
+        assert_eq!(g.mode(), RoutingMode::Only(GeoRegion::Cn));
         g.set_region(GeoRegion::Ru);
-        assert_eq!(g.mode(), RoutingMode::BypassRu);
+        assert_eq!(g.mode(), RoutingMode::Bypass(GeoRegion::Ru));
     }
 
     #[test]
@@ -1185,8 +1260,8 @@ mod tests {
             g.available_modes(),
             vec![
                 RoutingMode::Global,
-                RoutingMode::BypassRu,
-                RoutingMode::OnlyRu
+                RoutingMode::Bypass(GeoRegion::Ru),
+                RoutingMode::Only(GeoRegion::Ru)
             ]
         );
     }
@@ -1245,7 +1320,10 @@ mod tests {
         profile.tags = vec!["tag1".to_string()];
         config.profiles.push(profile);
         config.settings.geo_routing.set_region(GeoRegion::Ru);
-        config.settings.geo_routing.set_mode(RoutingMode::BypassRu);
+        config
+            .settings
+            .geo_routing
+            .set_mode(RoutingMode::Bypass(GeoRegion::Ru));
 
         let json = serde_json::to_string(&config).unwrap();
         let restored: Config = serde_json::from_str(&json).unwrap();
@@ -1259,12 +1337,12 @@ mod tests {
             .settings
             .geo_routing
             .selected_region_modes
-            .insert(GeoRegion::Ru, RoutingMode::BypassRu);
+            .insert(GeoRegion::Ru, RoutingMode::Bypass(GeoRegion::Ru));
         config
             .settings
             .geo_routing
             .selected_region_modes
-            .insert(GeoRegion::Cn, RoutingMode::OnlyCn);
+            .insert(GeoRegion::Cn, RoutingMode::Only(GeoRegion::Cn));
         config.settings.geo_routing.current_region = Some(GeoRegion::Ru);
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1278,7 +1356,7 @@ mod tests {
                 .get(&GeoRegion::Ru)
                 .copied()
                 .unwrap_or(RoutingMode::Global),
-            RoutingMode::BypassRu
+            RoutingMode::Bypass(GeoRegion::Ru)
         );
         assert_eq!(
             restored
@@ -1288,7 +1366,7 @@ mod tests {
                 .get(&GeoRegion::Cn)
                 .copied()
                 .unwrap_or(RoutingMode::Global),
-            RoutingMode::OnlyCn
+            RoutingMode::Only(GeoRegion::Cn)
         );
     }
 

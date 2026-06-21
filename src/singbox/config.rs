@@ -1,8 +1,9 @@
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::config::profile::{
-    DnsConfig, DnsServer, Profile, ProtocolConfig, RoutingMode, Settings,
+    DnsConfig, DnsServer, GeoRegion, Profile, ProtocolConfig, RoutingMode, Settings,
 };
 use crate::singbox::outbound::{
     build_anytls_outbound, build_http_outbound, build_hysteria2_outbound,
@@ -12,32 +13,36 @@ use crate::singbox::outbound::{
 };
 
 /// Availability of local geoip/geosite rule-sets used when building routes.
-/// Each region is present only when both files exist.
+/// A region is present only when both its files exist.
 #[derive(Debug, Clone, Default)]
 pub struct GeoAvailability {
-    pub ru: Option<(PathBuf, PathBuf)>,
-    pub cn: Option<(PathBuf, PathBuf)>,
-    pub ir: Option<(PathBuf, PathBuf)>,
+    /// `(geoip_path, geosite_path)` per region. Populated by the runner from
+    /// disk; `build_route` reads via `get`. Regions without rule-sets
+    /// (`GeoRegion::Global`) never appear here.
+    pub regions: HashMap<GeoRegion, (PathBuf, PathBuf)>,
 }
 
 impl GeoAvailability {
-    /// All rule-sets are available with dummy paths for tests.
+    pub fn get(&self, region: GeoRegion) -> Option<&(PathBuf, PathBuf)> {
+        self.regions.get(&region)
+    }
+
+    /// All rule-sets available with dummy paths under `/geo/`, for tests.
     #[cfg(test)]
     pub fn all() -> Self {
-        Self {
-            ru: Some((
-                PathBuf::from("/geo/geoip-ru.srs"),
-                PathBuf::from("/geo/geosite-category-ru.srs"),
-            )),
-            cn: Some((
-                PathBuf::from("/geo/geoip-cn.srs"),
-                PathBuf::from("/geo/geosite-cn.srs"),
-            )),
-            ir: Some((
-                PathBuf::from("/geo/geoip-ir.srs"),
-                PathBuf::from("/geo/geosite-category-ir.srs"),
-            )),
+        let mut regions = HashMap::new();
+        for region in GeoRegion::ALL {
+            if let Some(a) = crate::geo::region_assets(region) {
+                regions.insert(
+                    region,
+                    (
+                        PathBuf::from("/geo").join(a.geoip.filename),
+                        PathBuf::from("/geo").join(a.geosite.filename),
+                    ),
+                );
+            }
         }
+        Self { regions }
     }
 }
 
@@ -248,178 +253,48 @@ fn build_route(
 
     match routing_mode {
         RoutingMode::Global => {}
-        RoutingMode::BypassRu => {
+        RoutingMode::Bypass(region) | RoutingMode::Only(region)
+            if !matches!(region, GeoRegion::Global) =>
+        {
+            // `Bypass` sends matching traffic out the direct outbound; `Only`
+            // sends matching traffic through the proxy.
+            let outbound = if matches!(routing_mode, RoutingMode::Bypass(_)) {
+                "direct"
+            } else {
+                "proxy"
+            };
             rules.push(json!({
                 "ip_is_private": true,
-                "outbound": "direct"
+                "outbound": "direct",
             }));
-            if let Some((geoip_ru, geosite_ru)) = &geo.ru {
-                rules.push(json!({
-                    "rule_set": ["geosite-category-ru"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-category-ru",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_ru
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-ru"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-ru",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_ru
-                }));
+            if let (Some(assets), Some((geoip_path, geosite_path))) =
+                (crate::geo::region_assets(*region), geo.get(*region))
+            {
+                // Existing order: geosite rule first, then geoip. Tags are
+                // derived from filenames (`geoip-ru.srs` → `geoip-ru`).
+                for (path, asset) in [(geosite_path, &assets.geosite), (geoip_path, &assets.geoip)]
+                {
+                    let tag = asset.tag();
+                    rules.push(json!({
+                        "rule_set": [tag],
+                        "outbound": outbound,
+                    }));
+                    rule_sets.push(json!({
+                        "tag": tag,
+                        "type": "local",
+                        "format": "binary",
+                        "path": path,
+                    }));
+                }
             }
         }
-        RoutingMode::OnlyRu => {
-            rules.push(json!({
-                "ip_is_private": true,
-                "outbound": "direct"
-            }));
-            if let Some((geoip_ru, geosite_ru)) = &geo.ru {
-                rules.push(json!({
-                    "rule_set": ["geosite-category-ru"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-category-ru",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_ru
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-ru"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-ru",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_ru
-                }));
-            }
-        }
-        RoutingMode::BypassCn => {
-            rules.push(json!({
-                "ip_is_private": true,
-                "outbound": "direct"
-            }));
-            if let Some((geoip_cn, geosite_cn)) = &geo.cn {
-                rules.push(json!({
-                    "rule_set": ["geosite-cn"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-cn",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_cn
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-cn"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-cn",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_cn
-                }));
-            }
-        }
-        RoutingMode::OnlyCn => {
-            rules.push(json!({
-                "ip_is_private": true,
-                "outbound": "direct"
-            }));
-            if let Some((geoip_cn, geosite_cn)) = &geo.cn {
-                rules.push(json!({
-                    "rule_set": ["geosite-cn"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-cn",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_cn
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-cn"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-cn",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_cn
-                }));
-            }
-        }
-        RoutingMode::BypassIr => {
-            rules.push(json!({
-                "ip_is_private": true,
-                "outbound": "direct"
-            }));
-            if let Some((geoip_ir, geosite_ir)) = &geo.ir {
-                rules.push(json!({
-                    "rule_set": ["geosite-category-ir"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-category-ir",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_ir
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-ir"],
-                    "outbound": "direct"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-ir",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_ir
-                }));
-            }
-        }
-        RoutingMode::OnlyIr => {
-            rules.push(json!({
-                "ip_is_private": true,
-                "outbound": "direct"
-            }));
-            if let Some((geoip_ir, geosite_ir)) = &geo.ir {
-                rules.push(json!({
-                    "rule_set": ["geosite-category-ir"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geosite-category-ir",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geosite_ir
-                }));
-                rules.push(json!({
-                    "rule_set": ["geoip-ir"],
-                    "outbound": "proxy"
-                }));
-                rule_sets.push(json!({
-                    "tag": "geoip-ir",
-                    "type": "local",
-                    "format": "binary",
-                    "path": geoip_ir
-                }));
-            }
-        }
+        // Bypass(Global) / Only(Global) are unreachable through `available()`
+        // but the enum permits them — degrade to a no-op.
+        RoutingMode::Bypass(_) | RoutingMode::Only(_) => {}
     }
 
     let final_outbound = match routing_mode {
-        RoutingMode::OnlyRu | RoutingMode::OnlyCn | RoutingMode::OnlyIr => "direct",
+        RoutingMode::Only(_) => "direct",
         _ => "proxy",
     };
 
@@ -543,7 +418,7 @@ mod tests {
         let profile = test_profile();
         let mut geo_routing = GeoRouting::default();
         geo_routing.set_region(GeoRegion::Ru);
-        geo_routing.set_mode(RoutingMode::OnlyRu);
+        geo_routing.set_mode(RoutingMode::Only(GeoRegion::Ru));
         let settings = Settings {
             geo_routing,
             ..Default::default()
@@ -993,7 +868,7 @@ mod tests {
     #[test]
     fn build_route_only_ru_has_private_rule_and_final_direct() {
         let (route, _rule_sets) = build_route(
-            &RoutingMode::OnlyRu,
+            &RoutingMode::Only(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1007,7 +882,7 @@ mod tests {
         let profile = test_profile();
         let mut geo_routing = GeoRouting::default();
         geo_routing.set_region(GeoRegion::Cn);
-        geo_routing.set_mode(RoutingMode::OnlyCn);
+        geo_routing.set_mode(RoutingMode::Only(GeoRegion::Cn));
         let settings = Settings {
             geo_routing,
             ..Default::default()
@@ -1020,7 +895,7 @@ mod tests {
     #[test]
     fn build_route_bypass_cn_has_private_rule() {
         let (route, _rule_sets) = build_route(
-            &RoutingMode::BypassCn,
+            &RoutingMode::Bypass(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1032,7 +907,7 @@ mod tests {
     #[test]
     fn build_route_only_cn_has_private_rule_and_final_direct() {
         let (route, _rule_sets) = build_route(
-            &RoutingMode::OnlyCn,
+            &RoutingMode::Only(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1267,7 +1142,7 @@ mod tests {
     #[test]
     fn build_route_bypass_ir_has_private_rule_and_final_proxy() {
         let (route, rule_sets) = build_route(
-            &RoutingMode::BypassIr,
+            &RoutingMode::Bypass(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1286,7 +1161,7 @@ mod tests {
     #[test]
     fn build_route_only_ir_has_private_rule_and_final_direct() {
         let (route, rule_sets) = build_route(
-            &RoutingMode::OnlyIr,
+            &RoutingMode::Only(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1300,7 +1175,7 @@ mod tests {
     fn build_route_bypass_ru_has_private_rule_and_final_proxy() {
         // Only the OnlyRu variant was tested explicitly; Bypass had no direct test.
         let (route, rule_sets) = build_route(
-            &RoutingMode::BypassRu,
+            &RoutingMode::Bypass(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::all(),
         );
@@ -1313,7 +1188,7 @@ mod tests {
     #[test]
     fn build_route_bypass_ru_without_geo_emits_no_rule_sets() {
         let (_route, rule_sets) = build_route(
-            &RoutingMode::BypassRu,
+            &RoutingMode::Bypass(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::default(),
         );
@@ -1323,7 +1198,7 @@ mod tests {
     #[test]
     fn build_route_only_cn_without_geo_emits_no_rule_sets() {
         let (_route, rule_sets) = build_route(
-            &RoutingMode::OnlyCn,
+            &RoutingMode::Only(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::default(),
         );
@@ -1333,7 +1208,7 @@ mod tests {
     #[test]
     fn build_route_bypass_ir_without_geo_emits_no_rule_sets() {
         let (_route, rule_sets) = build_route(
-            &RoutingMode::BypassIr,
+            &RoutingMode::Bypass(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::default(),
         );
@@ -1343,7 +1218,7 @@ mod tests {
     #[test]
     fn build_route_only_ir_without_geo_emits_no_rule_sets() {
         let (_route, rule_sets) = build_route(
-            &RoutingMode::OnlyIr,
+            &RoutingMode::Only(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::default(),
         );

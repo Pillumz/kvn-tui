@@ -78,10 +78,7 @@ impl<'a> Widget for StatusBar<'a> {
             _ => ("[DISCONNECTED]", Theme::error()),
         };
 
-        let routing = format!(
-            "[{}]",
-            self.model.config.settings.geo_routing.mode().as_str()
-        );
+        let routing = format!("[{}]", self.model.config.settings.geo_routing.mode());
 
         let is_global =
             self.model.config.settings.geo_routing.current_region == Some(GeoRegion::Global);

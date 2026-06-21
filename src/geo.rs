@@ -9,36 +9,119 @@ use serde::{Deserialize, Serialize};
 use crate::app::msg::GeoResult;
 use crate::config::profile::GeoRegion;
 
-const GEOIP_RU_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs";
-const GEOSITE_RU_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs";
-const GEOIP_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs";
-const GEOSITE_CN_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs";
-const GEOIP_IR_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs";
-const GEOSITE_IR_URL: &str =
-    "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ir.srs";
+/// One downloadable rule-set file (geoip *or* geosite) for a region.
+pub(crate) struct GeoAsset {
+    pub(crate) filename: &'static str,
+    pub(crate) url: &'static str,
+}
+
+impl GeoAsset {
+    /// sing-box rule-set tag — the filename without the `.srs` extension
+    /// (`"geoip-ru.srs"` → `"geoip-ru"`). The tag is what's referenced from
+    /// route rules in the generated sing-box config.
+    pub(crate) fn tag(&self) -> &'static str {
+        self.filename.trim_end_matches(".srs")
+    }
+}
+
+/// Both rule-sets (geoip + geosite) a region downloads.
+pub(crate) struct RegionAssets {
+    pub(crate) geoip: GeoAsset,
+    pub(crate) geosite: GeoAsset,
+}
+
+/// Single source of truth for which files / URLs back each region. Adding a
+/// new country = add one match arm here plus a `GeoRegion::ALL` entry.
+///
+/// Returns `None` for `GeoRegion::Global`, which has no rule-sets.
+pub(crate) fn region_assets(region: GeoRegion) -> Option<RegionAssets> {
+    match region {
+        GeoRegion::Global => None,
+        GeoRegion::Ru => Some(RegionAssets {
+            geoip: GeoAsset {
+                filename: "geoip-ru.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
+            },
+            geosite: GeoAsset {
+                filename: "geosite-category-ru.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs",
+            },
+        }),
+        GeoRegion::Cn => Some(RegionAssets {
+            geoip: GeoAsset {
+                filename: "geoip-cn.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+            },
+            geosite: GeoAsset {
+                filename: "geosite-cn.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+            },
+        }),
+        GeoRegion::Ir => Some(RegionAssets {
+            geoip: GeoAsset {
+                filename: "geoip-ir.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs",
+            },
+            geosite: GeoAsset {
+                filename: "geosite-category-ir.srs",
+                url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ir.srs",
+            },
+        }),
+    }
+}
 
 /// Metadata tracking ETags and update time for geo rule-sets.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct GeoMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geoip_ru_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geosite_ru_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geoip_cn_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geosite_cn_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geoip_ir_etag: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    geosite_ir_etag: Option<String>,
+    /// Maps filename (e.g. `"geoip-ru.srs"`) → ETag returned by the server on
+    /// the last successful download. Used to short-circuit re-downloads.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    etags: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     updated_at: HashMap<GeoRegion, DateTime<Local>>,
+}
+
+/// Deserialization shape that also accepts the legacy per-country etag fields
+/// written by older builds. Folded into the modern map-shaped `GeoMetadata`.
+#[derive(Debug, Default, Deserialize)]
+struct GeoMetadataRaw {
+    #[serde(default)]
+    etags: HashMap<String, String>,
+    #[serde(default)]
+    updated_at: HashMap<GeoRegion, DateTime<Local>>,
+    #[serde(default)]
+    geoip_ru_etag: Option<String>,
+    #[serde(default)]
+    geosite_ru_etag: Option<String>,
+    #[serde(default)]
+    geoip_cn_etag: Option<String>,
+    #[serde(default)]
+    geosite_cn_etag: Option<String>,
+    #[serde(default)]
+    geoip_ir_etag: Option<String>,
+    #[serde(default)]
+    geosite_ir_etag: Option<String>,
+}
+
+impl From<GeoMetadataRaw> for GeoMetadata {
+    fn from(raw: GeoMetadataRaw) -> Self {
+        let mut etags = raw.etags;
+        let mut promote = |filename: &str, value: Option<String>| {
+            if let Some(v) = value {
+                etags.entry(filename.to_string()).or_insert(v);
+            }
+        };
+        promote("geoip-ru.srs", raw.geoip_ru_etag);
+        promote("geosite-category-ru.srs", raw.geosite_ru_etag);
+        promote("geoip-cn.srs", raw.geoip_cn_etag);
+        promote("geosite-cn.srs", raw.geosite_cn_etag);
+        promote("geoip-ir.srs", raw.geoip_ir_etag);
+        promote("geosite-category-ir.srs", raw.geosite_ir_etag);
+        GeoMetadata {
+            etags,
+            updated_at: raw.updated_at,
+        }
+    }
 }
 
 /// Manages downloading and updating geoip/geosite rule-sets for sing-box.
@@ -66,42 +149,26 @@ impl GeoManager {
         })
     }
 
-    /// Return paths to local RU rule-set files.
-    pub fn local_paths(&self) -> (PathBuf, PathBuf) {
-        let geoip_ru = self.geo_dir.join("geoip-ru.srs");
-        let geosite_ru = self.geo_dir.join("geosite-category-ru.srs");
-        (geoip_ru, geosite_ru)
-    }
-
-    /// Return paths to local CN rule-set files.
-    pub fn local_paths_cn(&self) -> (PathBuf, PathBuf) {
-        let geoip_cn = self.geo_dir.join("geoip-cn.srs");
-        let geosite_cn = self.geo_dir.join("geosite-cn.srs");
-        (geoip_cn, geosite_cn)
-    }
-
-    /// Return paths to local IR rule-set files.
-    pub fn local_paths_ir(&self) -> (PathBuf, PathBuf) {
-        let geoip_ir = self.geo_dir.join("geoip-ir.srs");
-        let geosite_ir = self.geo_dir.join("geosite-category-ir.srs");
-        (geoip_ir, geosite_ir)
+    /// Return `(geoip, geosite)` local paths for `region`, or `None` for
+    /// regions without rule-sets (`Global`). Paths are computed; the files
+    /// may not exist yet.
+    pub fn local_paths(&self, region: GeoRegion) -> Option<(PathBuf, PathBuf)> {
+        region_assets(region).map(|a| {
+            (
+                self.geo_dir.join(a.geoip.filename),
+                self.geo_dir.join(a.geosite.filename),
+            )
+        })
     }
 
     /// Return whether local rule-set files for the given region are present.
+    /// `Global` always returns `true` (nothing to download).
     pub fn has_databases(&self, region: GeoRegion) -> bool {
-        match region {
-            GeoRegion::Global => true,
-            GeoRegion::Ru => {
-                let (geoip, geosite) = self.local_paths();
-                geoip.exists() && geosite.exists()
-            }
-            GeoRegion::Cn => {
-                let (geoip, geosite) = self.local_paths_cn();
-                geoip.exists() && geosite.exists()
-            }
-            GeoRegion::Ir => {
-                let (geoip, geosite) = self.local_paths_ir();
-                geoip.exists() && geosite.exists()
+        match region_assets(region) {
+            None => true,
+            Some(a) => {
+                self.geo_dir.join(a.geoip.filename).exists()
+                    && self.geo_dir.join(a.geosite.filename).exists()
             }
         }
     }
@@ -118,138 +185,44 @@ impl GeoManager {
     }
 
     /// Check whether rule-sets have updates available for the given region.
-    /// Returns (geoip_has_update, geosite_has_update).
+    /// Returns `(geoip_has_update, geosite_has_update)`. For `Global`, both
+    /// are `false`.
     pub fn check_update_available(&self, region: GeoRegion) -> Result<(bool, bool)> {
+        let Some(assets) = region_assets(region) else {
+            return Ok((false, false));
+        };
         let meta = self.load_metadata().unwrap_or_default();
-
-        match region {
-            GeoRegion::Global => Ok((false, false)),
-            GeoRegion::Ru => {
-                let (geoip_ru, geosite_ru) = self.local_paths();
-                let geoip_missing = !geoip_ru.exists();
-                let geosite_missing = !geosite_ru.exists();
-
-                let geoip_update = if geoip_missing {
-                    true
-                } else {
-                    self.check_single(GEOIP_RU_URL, meta.geoip_ru_etag.as_deref())?
-                };
-
-                let geosite_update = if geosite_missing {
-                    true
-                } else {
-                    self.check_single(GEOSITE_RU_URL, meta.geosite_ru_etag.as_deref())?
-                };
-
-                Ok((geoip_update, geosite_update))
+        let needs = |asset: &GeoAsset| -> Result<bool> {
+            let local = self.geo_dir.join(asset.filename);
+            if !local.exists() {
+                return Ok(true);
             }
-            GeoRegion::Cn => {
-                let (geoip_cn, geosite_cn) = self.local_paths_cn();
-                let geoip_missing = !geoip_cn.exists();
-                let geosite_missing = !geosite_cn.exists();
-
-                let geoip_update = if geoip_missing {
-                    true
-                } else {
-                    self.check_single(GEOIP_CN_URL, meta.geoip_cn_etag.as_deref())?
-                };
-
-                let geosite_update = if geosite_missing {
-                    true
-                } else {
-                    self.check_single(GEOSITE_CN_URL, meta.geosite_cn_etag.as_deref())?
-                };
-
-                Ok((geoip_update, geosite_update))
-            }
-            GeoRegion::Ir => {
-                let (geoip_ir, geosite_ir) = self.local_paths_ir();
-                let geoip_missing = !geoip_ir.exists();
-                let geosite_missing = !geosite_ir.exists();
-
-                let geoip_update = if geoip_missing {
-                    true
-                } else {
-                    self.check_single(GEOIP_IR_URL, meta.geoip_ir_etag.as_deref())?
-                };
-
-                let geosite_update = if geosite_missing {
-                    true
-                } else {
-                    self.check_single(GEOSITE_IR_URL, meta.geosite_ir_etag.as_deref())?
-                };
-
-                Ok((geoip_update, geosite_update))
-            }
-        }
+            self.check_single(
+                asset.url,
+                meta.etags.get(asset.filename).map(String::as_str),
+            )
+        };
+        Ok((needs(&assets.geoip)?, needs(&assets.geosite)?))
     }
 
     /// Download rule-sets for the given region and update metadata atomically.
+    /// `Global` is a no-op returning `Ok(false)`.
     pub fn download_databases(&self, region: GeoRegion) -> Result<bool> {
-        let mut meta = self.load_metadata().unwrap_or_default();
-
-        if matches!(region, GeoRegion::Global) {
+        let Some(assets) = region_assets(region) else {
             return Ok(false);
-        }
-
-        match region {
-            GeoRegion::Global => unreachable!(),
-            GeoRegion::Ru => {
-                let (geoip_ru, geosite_ru) = self.local_paths();
-
-                match self.download_file(GEOIP_RU_URL, &geoip_ru) {
-                    Ok(etag) => {
-                        meta.geoip_ru_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geoip-ru.srs"),
-                }
-
-                match self.download_file(GEOSITE_RU_URL, &geosite_ru) {
-                    Ok(etag) => {
-                        meta.geosite_ru_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geosite-category-ru.srs"),
-                }
-            }
-            GeoRegion::Cn => {
-                let (geoip_cn, geosite_cn) = self.local_paths_cn();
-
-                match self.download_file(GEOIP_CN_URL, &geoip_cn) {
-                    Ok(etag) => {
-                        meta.geoip_cn_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geoip-cn.srs"),
-                }
-
-                match self.download_file(GEOSITE_CN_URL, &geosite_cn) {
-                    Ok(etag) => {
-                        meta.geosite_cn_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geosite-cn.srs"),
-                }
-            }
-            GeoRegion::Ir => {
-                let (geoip_ir, geosite_ir) = self.local_paths_ir();
-
-                match self.download_file(GEOIP_IR_URL, &geoip_ir) {
-                    Ok(etag) => {
-                        meta.geoip_ir_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geoip-ir.srs"),
-                }
-
-                match self.download_file(GEOSITE_IR_URL, &geosite_ir) {
-                    Ok(etag) => {
-                        meta.geosite_ir_etag = etag;
-                    }
-                    Err(e) => return Err(e).context("Failed to download geosite-category-ir.srs"),
-                }
+        };
+        let mut meta = self.load_metadata().unwrap_or_default();
+        for asset in [&assets.geoip, &assets.geosite] {
+            let dest = self.geo_dir.join(asset.filename);
+            let etag = self
+                .download_file(asset.url, &dest)
+                .with_context(|| format!("Failed to download {}", asset.filename))?;
+            if let Some(e) = etag {
+                meta.etags.insert(asset.filename.to_string(), e);
             }
         }
-
         meta.updated_at.insert(region, Local::now());
         self.save_metadata(&meta)?;
-
         Ok(true)
     }
 
@@ -295,9 +268,9 @@ impl GeoManager {
         }
         let text = fs::read_to_string(&self.metadata_path)
             .with_context(|| format!("Failed to read {:?}", self.metadata_path))?;
-        let meta: GeoMetadata = serde_json::from_str(&text)
+        let raw: GeoMetadataRaw = serde_json::from_str(&text)
             .with_context(|| format!("Failed to parse {:?}", self.metadata_path))?;
-        Ok(meta)
+        Ok(raw.into())
     }
 
     fn save_metadata(&self, meta: &GeoMetadata) -> Result<()> {
@@ -361,49 +334,139 @@ impl GeoManager {
 mod tests {
     use super::*;
 
+    /// Regions that actually have rule-sets (all of `GeoRegion::ALL` except
+    /// `Global`). Used to parametrize per-country tests.
+    const RULE_REGIONS: [GeoRegion; 3] = [GeoRegion::Ru, GeoRegion::Cn, GeoRegion::Ir];
+
     #[test]
-    fn local_paths_are_inside_geo_dir() {
-        let gm = GeoManager::new().unwrap();
-        let (geoip_ru, geosite_ru) = gm.local_paths();
-        assert!(geoip_ru.file_name().unwrap() == "geoip-ru.srs");
-        assert!(geosite_ru.file_name().unwrap() == "geosite-category-ru.srs");
-        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
-        assert!(geoip_cn.file_name().unwrap() == "geoip-cn.srs");
-        assert!(geosite_cn.file_name().unwrap() == "geosite-cn.srs");
+    fn region_assets_some_for_rule_regions_none_for_global() {
+        assert!(region_assets(GeoRegion::Global).is_none());
+        for region in RULE_REGIONS {
+            let a = region_assets(region).expect("rule region has assets");
+            assert!(a.geoip.filename.starts_with("geoip-"));
+            assert!(a.geosite.filename.starts_with("geosite-"));
+            assert!(a.geoip.url.contains(a.geoip.filename));
+            assert!(a.geosite.url.contains(a.geosite.filename));
+        }
     }
 
     #[test]
-    fn metadata_roundtrip() {
+    fn geo_asset_tag_strips_srs_extension() {
+        let a = region_assets(GeoRegion::Ru).unwrap();
+        assert_eq!(a.geoip.tag(), "geoip-ru");
+        assert_eq!(a.geosite.tag(), "geosite-category-ru");
+    }
+
+    #[test]
+    fn local_paths_match_region_assets() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        assert!(gm.local_paths(GeoRegion::Global).is_none());
+        for region in RULE_REGIONS {
+            let (geoip, geosite) = gm.local_paths(region).unwrap();
+            let a = region_assets(region).unwrap();
+            assert_eq!(geoip.file_name().unwrap(), a.geoip.filename);
+            assert_eq!(geosite.file_name().unwrap(), a.geosite.filename);
+            assert!(geoip.starts_with(&gm.geo_dir));
+            assert!(geosite.starts_with(&gm.geo_dir));
+        }
+    }
+
+    #[test]
+    fn metadata_roundtrip_via_map() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
         let now = Local::now();
+        let mut etags = HashMap::new();
         let mut updated_at = HashMap::new();
-        updated_at.insert(GeoRegion::Ru, now);
-        updated_at.insert(GeoRegion::Cn, now);
-        updated_at.insert(GeoRegion::Ir, now);
-        let meta = GeoMetadata {
-            geoip_ru_etag: Some("etag1".to_string()),
-            geosite_ru_etag: Some("etag2".to_string()),
-            geoip_cn_etag: Some("etag3".to_string()),
-            geosite_cn_etag: Some("etag4".to_string()),
-            geoip_ir_etag: Some("etag5".to_string()),
-            geosite_ir_etag: Some("etag6".to_string()),
-            updated_at,
-        };
+        for region in RULE_REGIONS {
+            let a = region_assets(region).unwrap();
+            etags.insert(
+                a.geoip.filename.to_string(),
+                format!("etag-{}-ip", region.as_str()),
+            );
+            etags.insert(
+                a.geosite.filename.to_string(),
+                format!("etag-{}-site", region.as_str()),
+            );
+            updated_at.insert(region, now);
+        }
+        let meta = GeoMetadata { etags, updated_at };
         gm.save_metadata(&meta).unwrap();
         let loaded = gm.load_metadata().unwrap();
-        assert_eq!(loaded.geoip_ru_etag, Some("etag1".to_string()));
-        assert_eq!(loaded.geosite_ru_etag, Some("etag2".to_string()));
-        assert_eq!(loaded.geoip_cn_etag, Some("etag3".to_string()));
-        assert_eq!(loaded.geosite_cn_etag, Some("etag4".to_string()));
-        assert_eq!(loaded.geoip_ir_etag, Some("etag5".to_string()));
-        assert_eq!(loaded.geosite_ir_etag, Some("etag6".to_string()));
-        assert_eq!(loaded.updated_at.len(), 3);
-        assert!(loaded.updated_at.contains_key(&GeoRegion::Ru));
-        assert!(loaded.updated_at.contains_key(&GeoRegion::Cn));
-        assert!(loaded.updated_at.contains_key(&GeoRegion::Ir));
+        for region in RULE_REGIONS {
+            let a = region_assets(region).unwrap();
+            assert_eq!(
+                loaded.etags.get(a.geoip.filename),
+                Some(&format!("etag-{}-ip", region.as_str()))
+            );
+            assert_eq!(
+                loaded.etags.get(a.geosite.filename),
+                Some(&format!("etag-{}-site", region.as_str()))
+            );
+            assert!(loaded.updated_at.contains_key(&region));
+        }
+    }
+
+    #[test]
+    fn metadata_migrates_legacy_per_country_etag_fields() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        // Hand-crafted legacy shape (no `etags` map, just the named fields).
+        let legacy = r#"{
+            "geoip_ru_etag": "legacy-ru-ip",
+            "geosite_ru_etag": "legacy-ru-site",
+            "geoip_cn_etag": "legacy-cn-ip",
+            "geoip_ir_etag": "legacy-ir-ip"
+        }"#;
+        fs::write(&gm.metadata_path, legacy).unwrap();
+        let loaded = gm.load_metadata().unwrap();
+        assert_eq!(
+            loaded.etags.get("geoip-ru.srs").map(String::as_str),
+            Some("legacy-ru-ip")
+        );
+        assert_eq!(
+            loaded
+                .etags
+                .get("geosite-category-ru.srs")
+                .map(String::as_str),
+            Some("legacy-ru-site")
+        );
+        assert_eq!(
+            loaded.etags.get("geoip-cn.srs").map(String::as_str),
+            Some("legacy-cn-ip")
+        );
+        assert_eq!(
+            loaded.etags.get("geoip-ir.srs").map(String::as_str),
+            Some("legacy-ir-ip")
+        );
+        // Absent legacy fields stay absent.
+        assert!(!loaded.etags.contains_key("geosite-cn.srs"));
+        assert!(!loaded.etags.contains_key("geosite-category-ir.srs"));
+    }
+
+    #[test]
+    fn metadata_map_wins_over_legacy_field_when_both_present() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let mixed = r#"{
+            "etags": { "geoip-ru.srs": "modern" },
+            "geoip_ru_etag": "legacy"
+        }"#;
+        fs::write(&gm.metadata_path, mixed).unwrap();
+        let loaded = gm.load_metadata().unwrap();
+        assert_eq!(
+            loaded.etags.get("geoip-ru.srs").map(String::as_str),
+            Some("modern")
+        );
     }
 
     #[test]
@@ -412,44 +475,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
-        let (geoip_ru, geosite_ru) = gm.local_paths();
-        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
         let _ = fs::remove_file(&gm.metadata_path);
         let meta = gm.load_metadata().unwrap();
-        assert!(meta.geoip_ru_etag.is_none());
-        assert!(meta.geosite_ru_etag.is_none());
-        assert!(meta.geoip_cn_etag.is_none());
-        assert!(meta.geosite_cn_etag.is_none());
-        assert!(meta.geoip_ir_etag.is_none());
-        assert!(meta.geosite_ir_etag.is_none());
+        assert!(meta.etags.is_empty());
         assert!(meta.updated_at.is_empty());
-        let _ = fs::remove_file(&geoip_ru);
-        let _ = fs::remove_file(&geosite_ru);
-        let _ = fs::remove_file(&geoip_cn);
-        let _ = fs::remove_file(&geosite_cn);
     }
 
     #[test]
-    fn has_databases_reflects_file_presence() {
+    fn has_databases_reflects_file_presence_per_region() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
-        let (geoip_ru, geosite_ru) = gm.local_paths();
-        let _ = fs::remove_file(&geoip_ru);
-        let _ = fs::remove_file(&geosite_ru);
-
-        assert!(!gm.has_databases(GeoRegion::Ru));
         assert!(gm.has_databases(GeoRegion::Global));
+        for region in RULE_REGIONS {
+            let (geoip, geosite) = gm.local_paths(region).unwrap();
+            let _ = fs::remove_file(&geoip);
+            let _ = fs::remove_file(&geosite);
 
-        fs::write(&geoip_ru, b"dummy").unwrap();
-        assert!(!gm.has_databases(GeoRegion::Ru));
+            assert!(!gm.has_databases(region), "missing files: {:?}", region);
+            fs::write(&geoip, b"x").unwrap();
+            assert!(
+                !gm.has_databases(region),
+                "only geoip present: {:?}",
+                region
+            );
+            fs::write(&geosite, b"x").unwrap();
+            assert!(gm.has_databases(region), "both present: {:?}", region);
 
-        fs::write(&geosite_ru, b"dummy").unwrap();
-        assert!(gm.has_databases(GeoRegion::Ru));
-
-        let _ = fs::remove_file(&geoip_ru);
-        let _ = fs::remove_file(&geosite_ru);
+            let _ = fs::remove_file(&geoip);
+            let _ = fs::remove_file(&geosite);
+        }
     }
 
     #[test]
@@ -477,50 +533,9 @@ mod tests {
         let _ = fs::remove_file(&dest);
         gm.write_atomic(&dest, b"data").unwrap();
         assert!(dest.exists());
-        // Temp file should have been geoip-ru.srs.tmp, not geoip-ru.tmp
         let temp = gm.geo_dir.join("geoip-ru.srs.tmp");
         assert!(!temp.exists());
         let _ = fs::remove_file(&dest);
-    }
-
-    #[test]
-    fn local_paths_ir_filenames() {
-        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let gm = GeoManager::new().unwrap();
-        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
-        assert_eq!(geoip_ir.file_name().unwrap(), "geoip-ir.srs");
-        assert_eq!(geosite_ir.file_name().unwrap(), "geosite-category-ir.srs");
-        assert!(geoip_ir.starts_with(&gm.geo_dir));
-        assert!(geosite_ir.starts_with(&gm.geo_dir));
-    }
-
-    #[test]
-    fn has_databases_cn_and_ir_match_file_presence() {
-        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let gm = GeoManager::new().unwrap();
-
-        // CN
-        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
-        let _ = fs::remove_file(&geoip_cn);
-        let _ = fs::remove_file(&geosite_cn);
-        assert!(!gm.has_databases(GeoRegion::Cn));
-        fs::write(&geoip_cn, b"x").unwrap();
-        assert!(!gm.has_databases(GeoRegion::Cn));
-        fs::write(&geosite_cn, b"x").unwrap();
-        assert!(gm.has_databases(GeoRegion::Cn));
-
-        // IR
-        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
-        let _ = fs::remove_file(&geoip_ir);
-        let _ = fs::remove_file(&geosite_ir);
-        assert!(!gm.has_databases(GeoRegion::Ir));
-        fs::write(&geoip_ir, b"x").unwrap();
-        fs::write(&geosite_ir, b"x").unwrap();
-        assert!(gm.has_databases(GeoRegion::Ir));
     }
 
     #[test]
@@ -539,9 +554,9 @@ mod tests {
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
         let _ = fs::remove_file(&gm.metadata_path);
-        assert!(gm.last_updated(GeoRegion::Ru).is_none());
-        assert!(gm.last_updated(GeoRegion::Cn).is_none());
-        assert!(gm.last_updated(GeoRegion::Ir).is_none());
+        for region in RULE_REGIONS {
+            assert!(gm.last_updated(region).is_none());
+        }
     }
 
     #[test]
@@ -559,10 +574,8 @@ mod tests {
         };
         gm.save_metadata(&meta).unwrap();
         let formatted = gm.last_updated(GeoRegion::Ru).unwrap();
-        // "%Y-%m-%d %H:%M" — 16 chars.
         assert_eq!(formatted.len(), 16);
         assert_eq!(formatted, dt.format("%Y-%m-%d %H:%M").to_string());
-        // A region with no entry still returns None.
         assert!(gm.last_updated(GeoRegion::Cn).is_none());
     }
 
@@ -572,7 +585,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
-        // Global short-circuits without any HTTP call.
         let (a, b) = gm.check_update_available(GeoRegion::Global).unwrap();
         assert!(!a);
         assert!(!b);
@@ -585,7 +597,6 @@ mod tests {
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
         assert!(!gm.download_databases(GeoRegion::Global).unwrap());
-        // Metadata file should not have been created.
         assert!(!gm.metadata_path.exists());
     }
 
@@ -615,11 +626,11 @@ mod tests {
     #[ignore]
     fn test_download_srs_files() {
         let gm = GeoManager::new().unwrap();
-        let (geoip_ru, geosite_ru) = gm.local_paths();
+        let (geoip_ru, geosite_ru) = gm.local_paths(GeoRegion::Ru).unwrap();
         let _ = fs::remove_file(&geoip_ru);
         let _ = fs::remove_file(&geosite_ru);
 
-        let result = gm.download_databases(crate::config::profile::GeoRegion::Ru);
+        let result = gm.download_databases(GeoRegion::Ru);
         assert!(result.is_ok(), "download failed: {:?}", result);
         assert!(result.unwrap(), "expected updated=true");
 
@@ -629,9 +640,7 @@ mod tests {
         let updated = gm.last_updated(GeoRegion::Ru);
         assert!(updated.is_some(), "last_updated should be set");
 
-        let result = gm
-            .update_if_needed(crate::config::profile::GeoRegion::Ru)
-            .unwrap();
+        let result = gm.update_if_needed(GeoRegion::Ru).unwrap();
         assert!(
             matches!(result, GeoResult::UpToDate),
             "unexpected result: {:?}",

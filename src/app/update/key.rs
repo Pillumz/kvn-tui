@@ -89,13 +89,13 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('o') => {
             model.overlay = Overlay::GeoRegions;
-            model.geo_region_selected = match model.config.settings.geo_routing.current_region {
-                Some(GeoRegion::Ru) => 0,
-                Some(GeoRegion::Cn) => 1,
-                Some(GeoRegion::Ir) => 2,
-                Some(GeoRegion::Global) => 3,
-                None => 0,
-            };
+            model.geo_region_selected = model
+                .config
+                .settings
+                .geo_routing
+                .current_region
+                .and_then(|r| GeoRegion::ALL.iter().position(|x| *x == r))
+                .unwrap_or(0);
         }
         KeyCode::Char('r') if model.connection == ConnectionState::Connected => {
             if let Some(profile) = model.selected_profile() {
@@ -362,7 +362,7 @@ pub(super) fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effec
                 push_status(
                     &mut effects,
                     model,
-                    crate::app::model::AppStatus::Info(format!("Routing mode: {}", mode.as_str())),
+                    crate::app::model::AppStatus::Info(format!("Routing mode: {}", mode)),
                 );
 
                 if changed && model.connection == ConnectionState::Connected {
@@ -372,7 +372,7 @@ pub(super) fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effec
                         model,
                         crate::app::model::AppStatus::Info(format!(
                             "Mode changed to {} — reconnecting",
-                            mode.as_str()
+                            mode
                         )),
                     );
                 }
@@ -388,15 +388,10 @@ pub(super) fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effec
 }
 
 pub(super) fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    const REGIONS: &[GeoRegion] = &[
-        GeoRegion::Ru,
-        GeoRegion::Cn,
-        GeoRegion::Ir,
-        GeoRegion::Global,
-    ];
+    let regions = &GeoRegion::ALL;
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
-            crate::ui::nav::select_next(&mut model.geo_region_selected, REGIONS.len());
+            crate::ui::nav::select_next(&mut model.geo_region_selected, regions.len());
         }
         KeyCode::Char('k') | KeyCode::Up => {
             crate::ui::nav::select_prev(&mut model.geo_region_selected);
@@ -405,10 +400,10 @@ pub(super) fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect>
             crate::ui::nav::select_first(&mut model.geo_region_selected);
         }
         KeyCode::Char('G') => {
-            crate::ui::nav::select_last(&mut model.geo_region_selected, REGIONS.len());
+            crate::ui::nav::select_last(&mut model.geo_region_selected, regions.len());
         }
         KeyCode::Enter => {
-            if let Some(&region) = REGIONS.get(model.geo_region_selected) {
+            if let Some(&region) = regions.get(model.geo_region_selected) {
                 let old_region = model.config.settings.geo_routing.current_region;
                 let old_mode = model.config.settings.geo_routing.mode();
                 let changed = old_region != Some(region);
@@ -454,7 +449,7 @@ pub(super) fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect>
                             model,
                             crate::app::model::AppStatus::Info(format!(
                                 "Routing mode: {}",
-                                new_mode.as_str()
+                                new_mode
                             )),
                         );
                     }

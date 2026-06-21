@@ -58,18 +58,15 @@ fn check_config(path: &PathBuf) -> Result<()> {
 
 fn collect_geo_availability() -> GeoAvailability {
     let mut geo = GeoAvailability::default();
-    if let Ok(gm) = crate::geo::GeoManager::new() {
-        let (geoip_ru, geosite_ru) = gm.local_paths();
-        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
-        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
-        if geoip_ru.exists() && geosite_ru.exists() {
-            geo.ru = Some((geoip_ru, geosite_ru));
-        }
-        if geoip_cn.exists() && geosite_cn.exists() {
-            geo.cn = Some((geoip_cn, geosite_cn));
-        }
-        if geoip_ir.exists() && geosite_ir.exists() {
-            geo.ir = Some((geoip_ir, geosite_ir));
+    let Ok(gm) = crate::geo::GeoManager::new() else {
+        return geo;
+    };
+    for region in crate::config::profile::GeoRegion::ALL {
+        let Some((geoip, geosite)) = gm.local_paths(region) else {
+            continue;
+        };
+        if geoip.exists() && geosite.exists() {
+            geo.regions.insert(region, (geoip, geosite));
         }
     }
     geo
@@ -197,57 +194,51 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let geo = collect_geo_availability();
-        assert!(geo.ru.is_none());
-        assert!(geo.cn.is_none());
-        assert!(geo.ir.is_none());
+        assert!(geo.regions.is_empty());
     }
 
     #[test]
     fn collect_geo_availability_populates_each_region_independently() {
+        use crate::config::profile::GeoRegion;
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = crate::geo::GeoManager::new().unwrap();
 
-        // Only RU files present.
-        let (geoip_ru, geosite_ru) = gm.local_paths();
-        fs::write(&geoip_ru, b"x").unwrap();
-        fs::write(&geosite_ru, b"x").unwrap();
-        let geo = collect_geo_availability();
-        assert!(geo.ru.is_some());
-        assert!(geo.cn.is_none());
-        assert!(geo.ir.is_none());
+        // Add one region at a time, asserting that prior regions remain
+        // available and unconfigured regions stay absent.
+        let mut written = Vec::new();
+        for region in [GeoRegion::Ru, GeoRegion::Cn, GeoRegion::Ir] {
+            let (geoip, geosite) = gm.local_paths(region).unwrap();
+            fs::write(&geoip, b"x").unwrap();
+            fs::write(&geosite, b"x").unwrap();
+            written.push(region);
 
-        // Add CN.
-        let (geoip_cn, geosite_cn) = gm.local_paths_cn();
-        fs::write(&geoip_cn, b"x").unwrap();
-        fs::write(&geosite_cn, b"x").unwrap();
-        let geo = collect_geo_availability();
-        assert!(geo.ru.is_some());
-        assert!(geo.cn.is_some());
-        assert!(geo.ir.is_none());
-
-        // Add IR.
-        let (geoip_ir, geosite_ir) = gm.local_paths_ir();
-        fs::write(&geoip_ir, b"x").unwrap();
-        fs::write(&geosite_ir, b"x").unwrap();
-        let geo = collect_geo_availability();
-        assert!(geo.ru.is_some());
-        assert!(geo.cn.is_some());
-        assert!(geo.ir.is_some());
+            let geo = collect_geo_availability();
+            for r in [GeoRegion::Ru, GeoRegion::Cn, GeoRegion::Ir] {
+                assert_eq!(
+                    geo.regions.contains_key(&r),
+                    written.contains(&r),
+                    "region {:?} after writing {:?}",
+                    r,
+                    written
+                );
+            }
+        }
     }
 
     #[test]
     fn collect_geo_availability_skips_region_when_only_one_file_present() {
+        use crate::config::profile::GeoRegion;
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = crate::geo::GeoManager::new().unwrap();
-        let (geoip_ru, _) = gm.local_paths();
+        let (geoip_ru, _) = gm.local_paths(GeoRegion::Ru).unwrap();
         fs::write(&geoip_ru, b"x").unwrap();
-        // geosite missing → ru must stay None.
+        // geosite missing → Ru must stay absent.
         let geo = collect_geo_availability();
-        assert!(geo.ru.is_none());
+        assert!(!geo.regions.contains_key(&GeoRegion::Ru));
     }
 
     /// Validation against the real `sing-box` binary. Skipped automatically

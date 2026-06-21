@@ -685,7 +685,7 @@ mod tests {
             .config
             .settings
             .geo_routing
-            .set_mode(RoutingMode::BypassRu);
+            .set_mode(RoutingMode::Bypass(GeoRegion::Ru));
         let effects = handle_sources(&mut model, key('m'));
         assert_eq!(model.overlay, Overlay::RoutingMode);
         assert_eq!(model.routing_selected, 1);
@@ -863,7 +863,7 @@ mod tests {
         let effects = handle_routing_mode(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(
             model.config.settings.geo_routing.mode(),
-            RoutingMode::OnlyRu
+            RoutingMode::Only(GeoRegion::Ru)
         );
         assert_eq!(model.overlay, Overlay::None);
         assert!(model.status.text().contains("Only RU"));
@@ -961,7 +961,7 @@ mod tests {
             .config
             .settings
             .geo_routing
-            .set_mode(RoutingMode::OnlyRu);
+            .set_mode(RoutingMode::Only(GeoRegion::Ru));
         model.overlay = Overlay::GeoRegions;
         model.geo_region_selected = 3; // Global
 
@@ -983,7 +983,7 @@ mod tests {
                 .get(&GeoRegion::Ru)
                 .copied()
                 .unwrap_or(RoutingMode::Global),
-            RoutingMode::OnlyRu,
+            RoutingMode::Only(GeoRegion::Ru),
             "previous region's routing mode should be preserved"
         );
         assert_eq!(
@@ -1005,7 +1005,7 @@ mod tests {
             .config
             .settings
             .geo_routing
-            .set_mode(RoutingMode::BypassRu);
+            .set_mode(RoutingMode::Bypass(GeoRegion::Ru));
         model.overlay = Overlay::GeoRegions;
         model.geo_region_selected = 1; // Cn
 
@@ -1031,7 +1031,7 @@ mod tests {
         );
         assert_eq!(
             model.config.settings.geo_routing.mode(),
-            RoutingMode::BypassRu
+            RoutingMode::Bypass(GeoRegion::Ru)
         );
         assert!(effects.iter().any(|e| matches!(e, Effect::AppendAppLog { message, .. } if message.contains("Routing mode: Bypass RU"))));
     }
@@ -1046,7 +1046,7 @@ mod tests {
         handle_routing_mode(&mut model, KeyEvent::from(KeyCode::Enter));
         assert_eq!(
             model.config.settings.geo_routing.mode(),
-            RoutingMode::BypassRu
+            RoutingMode::Bypass(GeoRegion::Ru)
         );
         assert_eq!(
             model
@@ -1057,7 +1057,7 @@ mod tests {
                 .get(&GeoRegion::Ru)
                 .copied()
                 .unwrap_or(RoutingMode::Global),
-            RoutingMode::BypassRu
+            RoutingMode::Bypass(GeoRegion::Ru)
         );
     }
 
