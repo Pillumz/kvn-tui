@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub mod profile;
+pub mod subscription;
 
 use profile::Config;
 
@@ -34,20 +35,20 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
     serializable.settings.dns_strategy = serializable.settings.dns.strategy.clone();
 
     let json = serde_json::to_string_pretty(&serializable)?;
-    crate::infra::atomic::write(path, json.as_bytes())?;
+    crate::atomic_write::write(path, json.as_bytes())?;
 
     Ok(())
 }
 
 /// Load configuration from disk, or return default if not present.
 pub fn load_config() -> Result<Config> {
-    let path = crate::infra::paths::profiles_path().context("Failed to determine profiles path")?;
+    let path = crate::paths::profiles_path().context("Failed to determine profiles path")?;
     load_config_at(&path)
 }
 
 /// Save configuration to disk atomically.
 pub fn save_config(config: &Config) -> Result<()> {
-    let path = crate::infra::paths::profiles_path().context("Failed to determine profiles path")?;
+    let path = crate::paths::profiles_path().context("Failed to determine profiles path")?;
     save_config_at(&path, config)
 }
 
@@ -60,7 +61,7 @@ mod tests {
 
     #[test]
     fn config_dir_matches_paths_module() {
-        let from_paths = crate::infra::paths::config_dir();
+        let from_paths = crate::paths::config_dir();
         assert!(from_paths.is_some());
     }
 
@@ -125,7 +126,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         // Remove any existing file
-        let _ = std::fs::remove_file(crate::infra::paths::profiles_path().unwrap());
+        let _ = std::fs::remove_file(crate::paths::profiles_path().unwrap());
 
         let config = load_config().unwrap();
         assert!(config.profiles.is_empty());

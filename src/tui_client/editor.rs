@@ -11,7 +11,7 @@ use crossterm::terminal::{
 };
 
 use crate::config::profile::Config;
-use crate::infra::paths::profiles_path;
+use crate::paths::profiles_path;
 
 /// Detect the user's preferred editor using $VISUAL, $EDITOR, or a fallback chain.
 fn detect_editor() -> String {

@@ -14,7 +14,7 @@ use url::Url;
 use super::*;
 
 /// All share-link URI schemes recognised by [`parse_share_link`].
-/// Used both for prefix dispatch and by `infra::subscription` to detect
+/// Used both for prefix dispatch and by `config::subscription` to detect
 /// subscription bodies after base64 decoding.
 pub const SUPPORTED_SHARE_SCHEMES: &[&str] = &[
     "vless://",

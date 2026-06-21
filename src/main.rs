@@ -5,11 +5,13 @@
 #![cfg_attr(test, allow(unsafe_code))]
 
 mod app;
+mod atomic_write;
 mod cli;
 mod config;
 mod daemon;
-mod infra;
+mod geo;
 mod ipc;
+mod paths;
 mod services;
 mod singbox;
 mod tui_client;
@@ -23,7 +25,7 @@ use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::app::model::Model;
-use crate::infra::paths::ensure_config_dirs;
+use crate::paths::ensure_config_dirs;
 
 /// Entry point for the TUI VPN client.
 fn main() -> Result<()> {

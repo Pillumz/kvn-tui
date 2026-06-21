@@ -9,8 +9,8 @@ use crate::app::effect::Effect;
 use crate::app::model::{AppStatus, ConnectionState, Model, Overlay, TrafficStats};
 use crate::app::msg::{GeoResult, IpcCommand, Msg, StateSnapshot};
 use crate::app::update::update;
-use crate::infra::process_handle::ProcessHandle;
 use crate::ipc::{IpcServer, cleanup_socket};
+use crate::singbox::process_handle::ProcessHandle;
 
 /// Run the daemon main loop.
 pub fn run(mut model: Model) -> Result<()> {
@@ -154,7 +154,7 @@ fn execute_daemon_effect(
                 .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
-                let result = match crate::infra::geo::GeoManager::new() {
+                let result = match crate::geo::GeoManager::new() {
                     Ok(gm) => match gm.update_if_needed(region) {
                         Ok(geo_result) => geo_result,
                         Err(e) => GeoResult::Error(e.to_string()),
@@ -173,7 +173,7 @@ fn execute_daemon_effect(
                 .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
-                let last_updated = crate::infra::geo::GeoManager::new()
+                let last_updated = crate::geo::GeoManager::new()
                     .ok()
                     .and_then(|g| g.last_updated(region));
                 let _ = tx.send(Msg::GeoLastUpdated(last_updated));
@@ -189,7 +189,7 @@ fn execute_daemon_effect(
                 .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
-                let result = match crate::infra::geo::GeoManager::new() {
+                let result = match crate::geo::GeoManager::new() {
                     Ok(gm) => {
                         if gm.has_databases(region) {
                             GeoResult::UpToDate
@@ -218,7 +218,7 @@ fn execute_daemon_effect(
                 let url = sub.url.clone();
                 let tx = tx.clone();
                 thread::spawn(move || {
-                    let result = crate::infra::subscription::fetch_subscription(&url)
+                    let result = crate::config::subscription::fetch_subscription(&url)
                         .map_err(crate::app::msg::IpcError::from);
                     let _ = tx.send(Msg::SubscriptionFetched { id, result });
                 });
@@ -251,23 +251,25 @@ fn execute_daemon_effect(
         }
         Effect::FetchTrafficStats { .. } => {
             let tx = tx.clone();
-            thread::spawn(move || match crate::infra::clash_api::fetch_connections() {
-                Ok(snap) => {
-                    let sampled_at_ms = unix_now_ms();
-                    let _ = tx.send(Msg::TrafficStatsUpdated {
-                        up_total: snap.up_total,
-                        down_total: snap.down_total,
-                        conn_count: snap.conn_count,
-                        sampled_at_ms,
-                    });
-                }
-                Err(e) => {
-                    // The endpoint may legitimately be unreachable for a few
-                    // hundred ms after sing-box spawns; don't surface this to
-                    // the user.
-                    tracing::debug!("clash_api fetch failed: {e}");
-                }
-            });
+            thread::spawn(
+                move || match crate::singbox::clash_api::fetch_connections() {
+                    Ok(snap) => {
+                        let sampled_at_ms = unix_now_ms();
+                        let _ = tx.send(Msg::TrafficStatsUpdated {
+                            up_total: snap.up_total,
+                            down_total: snap.down_total,
+                            conn_count: snap.conn_count,
+                            sampled_at_ms,
+                        });
+                    }
+                    Err(e) => {
+                        // The endpoint may legitimately be unreachable for a few
+                        // hundred ms after sing-box spawns; don't surface this to
+                        // the user.
+                        tracing::debug!("clash_api fetch failed: {e}");
+                    }
+                },
+            );
         }
     }
     Ok(())

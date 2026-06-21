@@ -234,7 +234,7 @@ impl Model {
             .geo_routing
             .current_region
             .unwrap_or(GeoRegion::Global);
-        let geo_last_updated = crate::infra::geo::GeoManager::new()
+        let geo_last_updated = crate::geo::GeoManager::new()
             .ok()
             .and_then(|g| g.last_updated(region));
 
@@ -282,7 +282,7 @@ impl Model {
             .geo_routing
             .current_region
             .unwrap_or(GeoRegion::Global);
-        let geo_last_updated = crate::infra::geo::GeoManager::new()
+        let geo_last_updated = crate::geo::GeoManager::new()
             .ok()
             .and_then(|g| g.last_updated(region));
 
@@ -712,7 +712,7 @@ mod tests {
         )]);
         // Save should not panic and must write into the temp directory.
         let _ = model.save();
-        assert!(crate::infra::paths::profiles_path().unwrap().exists());
+        assert!(crate::paths::profiles_path().unwrap().exists());
     }
 
     #[test]

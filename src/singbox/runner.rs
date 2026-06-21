@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::config::profile::{Profile, Settings};
-use crate::infra::process_handle::ProcessHandle;
 use crate::singbox::config::{GeoAvailability, generate_config};
+use crate::singbox::process_handle::ProcessHandle;
 
 fn resolve_singbox_binary() -> String {
     std::env::var("SING_BOX_PATH").unwrap_or_else(|_| "sing-box".to_string())
@@ -27,7 +27,7 @@ fn singbox_binary() -> &'static str {
 fn write_config(profile: &Profile, settings: &Settings, geo: &GeoAvailability) -> Result<PathBuf> {
     let config =
         generate_config(profile, settings, geo).context("Failed to generate sing-box config")?;
-    let path = crate::infra::paths::temp_singbox_config_path();
+    let path = crate::paths::temp_singbox_config_path();
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -58,7 +58,7 @@ fn check_config(path: &PathBuf) -> Result<()> {
 
 fn collect_geo_availability() -> GeoAvailability {
     let mut geo = GeoAvailability::default();
-    if let Ok(gm) = crate::infra::geo::GeoManager::new() {
+    if let Ok(gm) = crate::geo::GeoManager::new() {
         let (geoip_ru, geosite_ru) = gm.local_paths();
         let (geoip_cn, geosite_cn) = gm.local_paths_cn();
         let (geoip_ir, geosite_ir) = gm.local_paths_ir();
@@ -207,7 +207,7 @@ mod tests {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let gm = crate::infra::geo::GeoManager::new().unwrap();
+        let gm = crate::geo::GeoManager::new().unwrap();
 
         // Only RU files present.
         let (geoip_ru, geosite_ru) = gm.local_paths();
@@ -242,7 +242,7 @@ mod tests {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let gm = crate::infra::geo::GeoManager::new().unwrap();
+        let gm = crate::geo::GeoManager::new().unwrap();
         let (geoip_ru, _) = gm.local_paths();
         fs::write(&geoip_ru, b"x").unwrap();
         // geosite missing → ru must stay None.

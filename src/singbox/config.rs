@@ -61,7 +61,7 @@ pub fn generate_config(
     let mut config = json!({
         "log": {
             "level": "debug",
-            "output": crate::infra::paths::singbox_log_path().to_string_lossy(),
+            "output": crate::paths::singbox_log_path().to_string_lossy(),
             "timestamp": true
         },
         "dns": dns,

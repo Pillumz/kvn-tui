@@ -7,7 +7,7 @@ use std::path::PathBuf;
 /// Format matches sing-box style: `+HHMM YYYY-MM-DD HH:MM:SS LEVEL message`
 pub fn append_app_log(level: &str, message: &str) {
     let now = Local::now();
-    let path = crate::infra::paths::app_log_path();
+    let path = crate::paths::app_log_path();
     if let Ok(mut file) = OpenOptions::new().append(true).create(true).open(&path) {
         let _ = writeln!(
             file,

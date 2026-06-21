@@ -26,19 +26,18 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `tui_client` | `src/tui_client.rs` | TUI client: connects to daemon via Unix socket, renders UI, forwards input, reads clipboard |
 | `ipc` | `src/ipc.rs` | NDJSON protocol over Unix domain socket for daemon ↔ TUI client communication |
 | `test_helpers` | `src/test_helpers.rs` | Shared test utilities (e.g. `model_with_profiles`)
-| `process_handle` | `src/infra/process_handle.rs` | Wrapper around `std::process::Child` for sing-box lifecycle |
 | `ui` | `src/ui.rs`, `src/ui/layout.rs`, `src/ui/widgets.rs`, `src/ui/styles.rs`, `src/ui/nav.rs` | ratatui rendering (used by TUI client only), layout splits, widget definitions, color theme, navigation helpers |
-| `config` | `src/config.rs`, `src/config/profile.rs` | JSON config I/O, profile and subscription struct definitions |
-| `singbox` | `src/singbox.rs`, `src/singbox/config.rs`, `src/singbox/runner.rs` | Process lifecycle: write temp config, run `sing-box check`, spawn `sing-box run`, kill on disconnect |
-| `clipboard` | `src/infra/clipboard.rs` | Wayland clipboard integration (`wl-paste`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
-| `geo` | `src/infra/geo.rs` | Download and cache geoip/geosite rule-sets for sing-box routing |
-| `editor` | `src/infra/editor.rs` | Launch `$EDITOR` / `$VISUAL` on `profiles.json`, temporarily restore terminal |
-| `paths` | `src/infra/paths.rs` | XDG directory resolution (`~/.config/kvn-tui/`), atomic path construction |
+| `config` | `src/config.rs`, `src/config/profile.rs`, `src/config/subscription.rs` | JSON config I/O, profile and subscription struct definitions, subscription fetcher |
+| `singbox` | `src/singbox.rs`, `src/singbox/config.rs`, `src/singbox/runner.rs`, `src/singbox/clash_api.rs`, `src/singbox/process_handle.rs` | Process lifecycle: write temp config, run `sing-box check`, spawn `sing-box run`, kill on disconnect; Clash API client for live traffic stats; `Child` wrapper |
+| `geo` | `src/geo.rs` | Download and cache geoip/geosite rule-sets for sing-box routing |
+| `paths` | `src/paths.rs` | XDG directory resolution (`~/.config/kvn-tui/`), atomic path construction |
+| `atomic_write` | `src/atomic_write.rs` | Atomic file write helper (write `.tmp` + fsync + rename + parent-dir fsync) |
 | `waybar` | `src/services/waybar.rs` | Read/write `state.json` for waybar integration and crash recovery |
 | `suspend` | `src/services/suspend.rs` | D-Bus listener for `systemd-logind` `PrepareForSleep` signals (zbus) |
 | `killswitch` | `src/services/killswitch.rs` | nftables helper integration: enable/disable systemd unit, pre-allow VPN handshake IPs, reconcile state on startup |
 | `services` | `src/services.rs`, `src/services/log_tailer.rs`, `src/services/waybar.rs`, `src/services/suspend.rs` | Background services: log tailer, waybar state I/O, suspend watcher (all run inside the daemon) |
-| `infra` | `src/infra.rs`, `src/infra/clipboard.rs`, `src/infra/editor.rs`, `src/infra/geo.rs`, `src/infra/paths.rs`, `src/infra/process_handle.rs`, `src/infra/subscription.rs` | Infrastructure utilities: clipboard (TUI client), editor (TUI client), geo, paths, process handle, subscription fetcher |
+| `clipboard` | `src/tui_client/clipboard.rs` | Wayland clipboard integration (`wl-paste`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
+| `editor` | `src/tui_client/editor.rs` | Launch `$EDITOR` / `$VISUAL` on `profiles.json`, temporarily restore terminal |
 
 ---
 
@@ -146,7 +145,7 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 
   The `TOTAL` line shows region / function / line coverage. Both region and line numbers must be ≥ 85 % for CI to pass.
 - The CI gate parses the `TOTAL` line directly because `cargo-llvm-cov --fail-under-*` flags are silently no-op in the 0.8.x series.
-- 0 %-coverage I/O wrappers (`daemon.rs`, `tui_client.rs`, `main.rs`, `services/killswitch.rs`, `services/suspend.rs`, `infra/clipboard.rs`, `infra/clash_api.rs`, install_* in `cli.rs`) are accepted as-is — they wrap subprocesses, DBus, Unix sockets, and HTTP, which need integration harnesses out of scope for unit tests. **Do not rewrite them just to add fake-based tests.** Cover new logic with pure-function tests instead.
+- 0 %-coverage I/O wrappers (`daemon.rs`, `tui_client.rs`, `main.rs`, `services/killswitch.rs`, `services/suspend.rs`, `tui_client/clipboard.rs`, `singbox/clash_api.rs`, install_* in `cli.rs`) are accepted as-is — they wrap subprocesses, DBus, Unix sockets, and HTTP, which need integration harnesses out of scope for unit tests. **Do not rewrite them just to add fake-based tests.** Cover new logic with pure-function tests instead.
 
 ---
 
@@ -198,7 +197,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 ### Share-Link Parsing
 - Entry point: `config::profile::parse_share_link(uri)` dispatches on the URI scheme.
 - Supported schemes: `vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://`, `hy2://`, `tuic://`, `shadowtls://`, `anytls://`, `socks://`, `socks5://`, `http://`, `https://`, `ssh://`.
-- All supported schemes are listed in `SUPPORTED_SHARE_SCHEMES` (used by both dispatch and the subscription Base64 heuristic in `infra::subscription`).
+- All supported schemes are listed in `SUPPORTED_SHARE_SCHEMES` (used by both dispatch and the subscription Base64 heuristic in `config::subscription`).
 - VLESS: extracts UUID, host, port, fragment (name), `flow`, `security`, `fp`, transport type, and REALITY params (`pbk`, `sid`, `sni`, `spx`). ECH config also parsed when present.
 - VMess: handles both base64-JSON (v2rayN / Shadowrocket) and inline URI forms.
 - Shadowsocks: handles SIP002 (`ss://base64(method:password)@host:port`) and legacy fully-base64 forms.
@@ -264,7 +263,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 The TEA update function (`app::update::update`) must remain free of I/O, threads, and system calls. Side effects are declared as `Effect` values and executed by the daemon runtime.
 
 Rules of thumb:
-- `app::update::update(model, msg) -> Vec<Effect>` must not call functions from `services`, `infra`, `config::load_config`, or perform any file/network/process I/O.
+- `app::update::update(model, msg) -> Vec<Effect>` must not call functions from `services`, `geo`, `paths`, `atomic_write`, `config::load_config`, `config::subscription`, `singbox::clash_api`, `singbox::runner`, `tui_client::clipboard`, `tui_client::editor`, or perform any file/network/process I/O.
 - `Model::set_status` is pure (mutates only in-memory state). Any message that should also be persisted to the application log must return `Effect::AppendAppLog`.
 - `Model::new` is allowed to perform initialization I/O (load config, read `state.json`, etc.).
 - `singbox::config::generate_config` is pure: it receives geo file availability (`GeoAvailability`) from the caller and does not touch the file system.

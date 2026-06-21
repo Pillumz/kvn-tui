@@ -3,7 +3,7 @@ use crate::app::model::{AppState, Model};
 /// Write current connection state to the state JSON file.
 pub fn write_state(model: &Model) {
     let state = build_state(model);
-    let path = crate::infra::paths::state_json_path();
+    let path = crate::paths::state_json_path();
     if let Err(e) = write_state_to(&state, &path) {
         tracing::warn!("state write failed: {e}");
     }
@@ -33,7 +33,7 @@ pub fn clear_state() {
         active_profile_id: None,
         singbox_pid: None,
     };
-    let path = crate::infra::paths::state_json_path();
+    let path = crate::paths::state_json_path();
     if let Err(e) = write_state_to(&state, &path) {
         tracing::warn!("state clear failed: {e}");
     }
@@ -62,7 +62,7 @@ fn read_state_from(path: impl AsRef<std::path::Path>) -> AppState {
 
 /// Read the current state from disk.
 pub fn read_state() -> AppState {
-    let path = crate::infra::paths::state_json_path();
+    let path = crate::paths::state_json_path();
     read_state_from(&path)
 }
 
@@ -84,7 +84,7 @@ pub fn detect_background_session() -> Option<(u32, uuid::Uuid, String)> {
 
 /// Print waybar status JSON to stdout.
 pub fn print_status() {
-    let path = crate::infra::paths::state_json_path();
+    let path = crate::paths::state_json_path();
     let mut state = read_state_from(&path);
 
     if state.connected {
