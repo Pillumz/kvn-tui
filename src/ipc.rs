@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -68,6 +69,11 @@ impl IpcServer {
             std::fs::remove_file(&path).ok();
         }
         let listener = UnixListener::bind(&path)?;
+        // 0600: any local user knowing the socket path could otherwise send
+        // IpcCommand (Quit / Key / Paste). XDG_RUNTIME_DIR is typically 0700
+        // already, but the /tmp/kvn-tui-<uid>.sock fallback path is not.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .context("Failed to chmod IPC socket")?;
         let clients: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
         let clients_clone = clients.clone();
         thread::spawn(move || {
@@ -308,6 +314,26 @@ mod tests {
                 std::env::set_var("XDG_RUNTIME_DIR", v);
             }
         }
+    }
+
+    #[test]
+    fn ipc_socket_has_0600_permissions() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        cleanup_socket();
+
+        let (server_tx, _server_rx) = channel::<Msg>();
+        let _server = IpcServer::bind(server_tx).expect("server bind");
+        let mode = std::fs::metadata(socket_path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {:o}", mode);
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
     }
 
     #[test]

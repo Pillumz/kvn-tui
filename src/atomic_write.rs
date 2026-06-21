@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -23,6 +24,12 @@ pub fn write(dest: &Path, data: &[u8]) -> Result<()> {
     {
         let mut file = fs::File::create(&temp)
             .with_context(|| format!("Failed to create temp file {:?}", temp))?;
+        // 0600 on the temp file so the rename preserves owner-only access on
+        // the destination — `profiles.json` carries credentials (VLESS UUIDs,
+        // Trojan/SS passwords, REALITY public keys) that must not be readable
+        // by other local users.
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to chmod temp file {:?}", temp))?;
         file.write_all(data)
             .with_context(|| format!("Failed to write temp file {:?}", temp))?;
         file.sync_all()
@@ -84,5 +91,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing/file.json");
         assert!(write(&path, b"data").is_err());
+    }
+
+    #[test]
+    fn atomic_write_sets_0600_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        write(&path, b"secret").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {:o}", mode);
+    }
+
+    #[test]
+    fn atomic_write_tightens_permissions_on_existing_loose_file() {
+        // Upgrade path: a pre-existing file written by an older build with
+        // umask-derived 0644 must end up at 0600 after the next save.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.json");
+        fs::write(&path, b"old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write(&path, b"new").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {:o}", mode);
     }
 }
