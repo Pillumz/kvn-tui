@@ -403,6 +403,20 @@ fn handle_subscription_result(
         model.subscription_fetching = false;
     }
 
+    // Remember where the cursor is so we can restore it to the subscription
+    // header after import (add_profile moves selection on every call).
+    let saved_selected = model.selected;
+
+    // Capture old dedup_key → UUID mapping before removing subscription profiles,
+    // so we can reuse UUIDs for servers that survive the update.
+    let old_sub_ids: std::collections::HashMap<String, Uuid> = model
+        .config
+        .profiles
+        .iter()
+        .filter(|p| p.subscription_id == Some(id))
+        .map(|p| (p.dedup_key(), p.id))
+        .collect();
+
     if managed {
         if let Some(sub) = model.config.subscriptions.iter_mut().find(|s| s.id == id) {
             sub.last_updated = Some(Local::now());
@@ -414,12 +428,21 @@ fn handle_subscription_result(
             .retain(|p| p.subscription_id != Some(id));
     }
 
-    match result {
+    let mut effects = match result {
         Ok(profiles) => {
             let mut imported = 0;
             for mut profile in profiles {
                 let key = profile.dedup_key();
-                if let Some(idx) = model
+                if let Some(&old_id) = old_sub_ids.get(&key) {
+                    // Same server was in this subscription before — reuse its UUID so
+                    // active_profile_id stays valid across updates.
+                    profile.id = old_id;
+                    if managed {
+                        profile.subscription_id = Some(id);
+                    }
+                    model.add_profile(profile);
+                    imported += 1;
+                } else if let Some(idx) = model
                     .config
                     .profiles
                     .iter()
@@ -480,7 +503,27 @@ fn handle_subscription_result(
             );
             effects
         }
+    };
+
+    // If the active profile was removed from the subscription, disconnect so the
+    // tunnel doesn't run against a profile that no longer exists.
+    if let Some(active_id) = model.active_profile_id {
+        if !model.config.profiles.iter().any(|p| p.id == active_id) {
+            effects.push(Effect::Disconnect);
+        }
     }
+
+    // Restore cursor to the subscription header (add_profile moves it on every
+    // call, so without this the focus would land on the last imported profile).
+    if managed {
+        if let Some(sub_idx) = model.config.subscriptions.iter().position(|s| s.id == id) {
+            model.selected = crate::app::model::row_for_subscription_header(&model.config, sub_idx);
+        }
+    } else {
+        model.selected = saved_selected;
+    }
+
+    effects
 }
 
 fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
@@ -1742,6 +1785,106 @@ mod tests {
                 app_log_info("Imported 1 profile(s) from subscription")
             ]
         );
+    }
+
+    #[test]
+    fn subscription_fetched_restores_selection_to_subscription_header() {
+        let sub_id = Uuid::new_v4();
+        let mut existing = Profile::new_vless(
+            "Old".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        existing.subscription_id = Some(sub_id);
+        let mut model = model_with_profiles(vec![existing]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        // Start with cursor on the subscription header.
+        model.selected = crate::app::model::row_for_subscription_header(&model.config, 0);
+        let header_row = model.selected;
+
+        let new_profiles = vec![
+            Profile::new_vless(
+                "A".to_string(),
+                "2.2.2.2".to_string(),
+                443,
+                "u2".to_string(),
+            ),
+            Profile::new_vless(
+                "B".to_string(),
+                "3.3.3.3".to_string(),
+                443,
+                "u3".to_string(),
+            ),
+        ];
+        handle_subscription_result(&mut model, sub_id, Ok(new_profiles));
+
+        assert_eq!(
+            model.selected, header_row,
+            "cursor should stay on the subscription header"
+        );
+    }
+
+    #[test]
+    fn subscription_fetched_preserves_active_profile_id_for_same_server() {
+        let sub_id = Uuid::new_v4();
+        let mut existing = Profile::new_vless(
+            "Server".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "same-uuid".to_string(),
+        );
+        existing.subscription_id = Some(sub_id);
+        let old_profile_id = existing.id;
+        let mut model = model_with_profiles(vec![existing]);
+        model.active_profile_id = Some(old_profile_id);
+
+        // Same server (same dedup key) comes back in the updated subscription.
+        let updated = Profile::new_vless(
+            "Server Renamed".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "same-uuid".to_string(),
+        );
+        handle_subscription_result(&mut model, sub_id, Ok(vec![updated]));
+
+        assert_eq!(model.config.profiles.len(), 1);
+        assert_eq!(model.config.profiles[0].id, old_profile_id);
+        assert_eq!(model.active_profile_id, Some(old_profile_id));
+    }
+
+    #[test]
+    fn subscription_fetched_clears_active_profile_id_when_profile_removed() {
+        let sub_id = Uuid::new_v4();
+        let mut existing = Profile::new_vless(
+            "Old Server".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "old-uuid".to_string(),
+        );
+        existing.subscription_id = Some(sub_id);
+        let old_profile_id = existing.id;
+        let mut model = model_with_profiles(vec![existing]);
+        model.active_profile_id = Some(old_profile_id);
+
+        // Updated subscription has a different server; old one is gone.
+        let new_server = Profile::new_vless(
+            "New Server".to_string(),
+            "2.2.2.2".to_string(),
+            443,
+            "new-uuid".to_string(),
+        );
+        let effects = handle_subscription_result(&mut model, sub_id, Ok(vec![new_server]));
+
+        assert_eq!(model.config.profiles.len(), 1);
+        // Disconnect is emitted; active_profile_id is cleared when the effect runs.
+        assert!(effects.contains(&Effect::Disconnect));
     }
 
     #[test]
