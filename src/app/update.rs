@@ -1312,6 +1312,24 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_active_profile_is_noop() {
+        let profile = Profile::new_vless(
+            "A".to_string(),
+            "1.1.1.1".to_string(),
+            443,
+            "u1".to_string(),
+        );
+        let profile_id = profile.id;
+        let mut model = model_with_profiles(vec![profile]);
+        model.connection = ConnectionState::Connected;
+        model.active_profile_id = Some(profile_id);
+        model.overlay = Overlay::None;
+        let effects = handle_key(&mut model, KeyEvent::from(KeyCode::Enter));
+        assert!(effects.is_empty());
+        assert_eq!(model.connection, ConnectionState::Connected);
+    }
+
+    #[test]
     fn connected_mode_r_reconnects() {
         let mut model = model_with_profiles(vec![Profile::new_vless(
             "A".to_string(),

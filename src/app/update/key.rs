@@ -157,6 +157,9 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 pub(super) fn handle_enter_on_sources(model: &mut Model) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(profile) = model.selected_profile() {
+        if model.active_profile_id == Some(profile.id) {
+            return effects;
+        }
         push_status(
             &mut effects,
             model,
