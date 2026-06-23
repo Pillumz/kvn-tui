@@ -9,7 +9,6 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
-│                                      ││                                      │
 │               ┌ Help ────────────────────────────────────────┐               │
 │               │Key          Action                           │               │
 │               │j / Down     Move down                        │               │
@@ -28,13 +27,14 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │a            Toggle auto-connect              │               │
 │               │K            Toggle kill switch               │               │
 │               │D            DNS settings                     │               │
+│               │t            Theme picker                     │               │
 │               │r            Reconnect                        │               │
 │               │s            Stop / disconnect                │               │
 │               │q / Esc      Detach TUI                       │               │
 │               │Ctrl+C       Quit                             │               │
 │               │?            Show this help                   │               │
+│               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
-│                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │

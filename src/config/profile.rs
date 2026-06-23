@@ -960,6 +960,11 @@ pub struct Settings {
     pub kill_switch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_profile: Option<Uuid>,
+    /// Active UI theme slug. The literal `"omarchy"` is a sentinel that
+    /// means "follow ~/.config/omarchy/current/theme.name"; any other value
+    /// names a bundled palette (see `src/ui/palette.rs`).
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_tun_interface() -> String {
@@ -968,6 +973,13 @@ fn default_tun_interface() -> String {
 
 fn default_dns_strategy() -> DnsStrategy {
     DnsStrategy::PreferIpv4
+}
+
+/// Default theme slug for fresh installs. Works on every distro because
+/// `tokyo-night` is one of the bundled palettes; on Omarchy users can
+/// switch to `"omarchy"` via the in-TUI picker to auto-follow the system.
+pub fn default_theme() -> String {
+    "tokyo-night".to_string()
 }
 
 impl Default for Settings {
@@ -981,6 +993,7 @@ impl Default for Settings {
             auto_connect: false,
             kill_switch: false,
             last_connected_profile: None,
+            theme: default_theme(),
         }
     }
 }

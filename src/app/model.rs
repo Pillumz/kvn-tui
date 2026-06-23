@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::config::profile::{Config, DnsStrategy, GeoRegion, Profile};
 use crate::config::{load_config, save_config};
+use crate::ui::styles::Theme;
 
 /// UI overlay shown on top of the main screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -17,6 +18,7 @@ pub enum Overlay {
     RoutingMode,
     GeoRegions,
     DnsSettings,
+    ThemeSettings,
 }
 
 /// A single selectable row in the unified Sources list.
@@ -170,6 +172,15 @@ pub struct Model {
     /// `handle_tick` to throttle Clash-API polling to ~1 Hz. Not serialized —
     /// clients don't need it.
     pub last_traffic_fetch_at: Option<Instant>,
+    /// UI color theme. Owned by the TUI client; the daemon never reads it.
+    /// On Omarchy systems the client resolves it from `theme.name` at
+    /// startup and updates it on file change.
+    pub theme: Theme,
+    /// Cursor position inside the theme picker overlay.
+    pub theme_selected: usize,
+    /// Live-preview theme slug while the theme picker is open. `None`
+    /// outside the overlay; cleared on Enter/Esc.
+    pub theme_draft: Option<String>,
 }
 
 impl Model {
@@ -261,6 +272,9 @@ impl Model {
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,
+            theme: Theme::legacy(),
+            theme_selected: 0,
+            theme_draft: None,
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -309,6 +323,9 @@ impl Model {
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,
+            theme: Theme::legacy(),
+            theme_selected: 0,
+            theme_draft: None,
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -496,6 +513,9 @@ impl Model {
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,
+            theme: Theme::legacy(),
+            theme_selected: 0,
+            theme_draft: None,
         }
     }
 }

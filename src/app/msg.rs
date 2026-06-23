@@ -1,5 +1,6 @@
 use crate::app::model::{ConnectionState, Overlay, TrafficStats};
 use crate::config::profile::{DnsStrategy, Profile, Settings, Subscription};
+use crate::ui::styles::Theme;
 use crossterm::event::KeyEvent;
 use uuid::Uuid;
 
@@ -74,6 +75,10 @@ pub enum Msg {
         conn_count: usize,
         sampled_at_ms: u64,
     },
+    /// New UI theme resolved from Omarchy's `theme.name` file (or a manual
+    /// override). Carries a fully constructed [`Theme`] so the pure reducer
+    /// can swap it in without performing any I/O.
+    ThemeChanged(Theme),
 }
 
 #[derive(Debug)]
@@ -194,6 +199,10 @@ pub struct StateSnapshot {
     pub dns_selected: usize,
     #[serde(default)]
     pub dns_strategy_draft: Option<DnsStrategy>,
+    #[serde(default)]
+    pub theme_selected: usize,
+    #[serde(default)]
+    pub theme_draft: Option<String>,
     pub geo_updating: bool,
     pub geo_last_updated: Option<String>,
     pub overlay: Overlay,

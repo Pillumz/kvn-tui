@@ -60,6 +60,13 @@ signal-hook = "0.3"
 # Unix UID for fallback socket path
 libc = "0.2"
 
+# Filesystem watcher (used to follow the active Omarchy theme at runtime)
+notify = "8"
+
+[build-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
 [dev-dependencies]
 insta = "1.47.2"
 tempfile = "3"

@@ -5,7 +5,6 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::app::model::Model;
 use crate::config::profile::GeoRegion;
-use crate::ui::styles::Theme;
 
 /// Widget that renders the bottom status bar.
 pub struct StatusBar<'a> {
@@ -73,9 +72,13 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let (status, style) = match self.model.connection {
-            crate::app::model::ConnectionState::Connected => ("[CONNECTED]", Theme::success()),
-            crate::app::model::ConnectionState::ConnectPending => ("[CONNECTING]", Theme::status()),
-            _ => ("[DISCONNECTED]", Theme::error()),
+            crate::app::model::ConnectionState::Connected => {
+                ("[CONNECTED]", self.model.theme.success())
+            }
+            crate::app::model::ConnectionState::ConnectPending => {
+                ("[CONNECTING]", self.model.theme.status())
+            }
+            _ => ("[DISCONNECTED]", self.model.theme.error()),
         };
 
         let routing = format!("[{}]", self.model.config.settings.geo_routing.mode());
@@ -87,12 +90,12 @@ impl<'a> Widget for StatusBar<'a> {
 
         if self.model.config.settings.auto_connect {
             spans.push(Span::raw(" "));
-            spans.push(Span::styled("[AUTO]", Theme::accent()));
+            spans.push(Span::styled("[AUTO]", self.model.theme.accent()));
         }
 
         if self.model.config.settings.kill_switch {
             spans.push(Span::raw(" "));
-            spans.push(Span::styled("[KS]", Theme::accent()));
+            spans.push(Span::styled("[KS]", self.model.theme.accent()));
         }
 
         let dns = &self.model.config.settings.dns;
@@ -106,11 +109,11 @@ impl<'a> Widget for StatusBar<'a> {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!("[DNS: {}]", dns_label),
-            Theme::accent(),
+            self.model.theme.accent(),
         ));
 
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(routing, Theme::accent()));
+        spans.push(Span::styled(routing, self.model.theme.accent()));
 
         if !is_global {
             let geo_info = if self.model.geo_updating {
@@ -122,7 +125,7 @@ impl<'a> Widget for StatusBar<'a> {
                 }
             };
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(geo_info, Theme::accent()));
+            spans.push(Span::styled(geo_info, self.model.theme.accent()));
         }
 
         spans.push(Span::raw(" "));
@@ -133,7 +136,7 @@ impl<'a> Widget for StatusBar<'a> {
         let max_status = available.saturating_sub(fixed_width);
         let truncated = truncate_to_width(status_text, max_status);
 
-        spans.push(Span::styled(truncated, Theme::normal()));
+        spans.push(Span::styled(truncated, self.model.theme.normal()));
 
         let text = Line::from(spans);
 

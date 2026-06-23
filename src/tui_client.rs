@@ -1,7 +1,8 @@
 mod clipboard;
 mod editor;
+pub(crate) mod theme_watch;
 
-use std::io;
+use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
@@ -21,6 +22,44 @@ use crate::app::model::Model;
 use crate::app::msg::{IpcCommand, Msg};
 use crate::ipc::IpcClient;
 use crate::services::LogTailer;
+use crate::ui::palette::to_rgb;
+use ratatui::style::Color;
+
+/// Format the OSC 11 escape sequence that asks the terminal emulator to
+/// repaint its own background (the pixel padding around the character
+/// grid that no TUI widget can reach). Most modern emulators
+/// (Alacritty, Foot, Kitty, Ghostty, Konsole, xterm, WezTerm…) honor it;
+/// the rest silently ignore the unknown OSC and stay as-is.
+pub(crate) fn osc11(color: Color) -> String {
+    let (r, g, b) = to_rgb(color);
+    format!("\x1b]11;#{r:02x}{g:02x}{b:02x}\x1b\\")
+}
+
+/// OSC 111: reset terminal background to its default. Emitted on exit so
+/// we don't leave the user's terminal stuck on our palette color.
+pub(crate) const OSC_RESET_BG: &str = "\x1b]111\x1b\\";
+
+/// Write OSC 11 to stdout (no-op when stdout isn't a TTY — pipes, CI,
+/// captured output). Errors are swallowed: a terminal that doesn't
+/// recognise the sequence is not a failure mode worth surfacing.
+fn apply_terminal_bg(color: Color) {
+    let mut stdout = io::stdout();
+    if !stdout.is_terminal() {
+        return;
+    }
+    let _ = stdout.write_all(osc11(color).as_bytes());
+    let _ = stdout.flush();
+}
+
+/// Counterpart to [`apply_terminal_bg`]: restore terminal default.
+fn reset_terminal_bg() {
+    let mut stdout = io::stdout();
+    if !stdout.is_terminal() {
+        return;
+    }
+    let _ = stdout.write_all(OSC_RESET_BG.as_bytes());
+    let _ = stdout.flush();
+}
 
 /// Run the TUI client: connects to daemon, renders UI, forwards input.
 pub fn run() -> Result<()> {
@@ -29,11 +68,14 @@ pub fn run() -> Result<()> {
 
     let config = crate::config::load_config().unwrap_or_default();
     let mut model = Model::from_config(config.clone());
+    model.theme = theme_watch::resolve_active(&model.config.settings.theme);
+    apply_terminal_bg(model.theme.palette_background());
 
     let (tx, rx) = channel::<Msg>();
     let event_reading_enabled = Arc::new(AtomicBool::new(true));
     spawn_event_reader(tx.clone(), event_reading_enabled.clone());
     spawn_ticker(tx.clone());
+    theme_watch::spawn_theme_watcher(tx.clone());
     client.spawn_reader(tx)?;
 
     enable_raw_mode()?;
@@ -58,6 +100,7 @@ pub fn run() -> Result<()> {
 
     disable_raw_mode()?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
+    reset_terminal_bg();
 
     result
 }
@@ -173,6 +216,16 @@ fn run_loop(
             Msg::Resize => {
                 needs_redraw = true;
             }
+            Msg::ThemeChanged(theme)
+                if model.config.settings.theme == theme_watch::OMARCHY_SENTINEL =>
+            {
+                let prev_bg = model.theme.palette_background();
+                model.theme = theme;
+                if model.theme.palette_background() != prev_bg {
+                    apply_terminal_bg(model.theme.palette_background());
+                }
+                needs_redraw = true;
+            }
             _ => {}
         }
 
@@ -199,6 +252,8 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.geo_region_selected = snapshot.geo_region_selected;
     model.dns_selected = snapshot.dns_selected;
     model.dns_strategy_draft = snapshot.dns_strategy_draft;
+    model.theme_selected = snapshot.theme_selected;
+    model.theme_draft = snapshot.theme_draft.clone();
     model.geo_updating = snapshot.geo_updating;
     model.geo_last_updated = snapshot.geo_last_updated;
     model.overlay = snapshot.overlay;
@@ -206,6 +261,17 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.config.subscriptions = snapshot.subscriptions;
     model.config.settings = snapshot.settings;
     model.traffic = snapshot.traffic;
+    // Resolve the effective theme: live-preview draft wins while the
+    // picker is open, otherwise honor the committed `Settings.theme`.
+    let effective_slug = model
+        .theme_draft
+        .as_deref()
+        .unwrap_or(&model.config.settings.theme);
+    let prev_bg = model.theme.palette_background();
+    model.theme = theme_watch::resolve_active(effective_slug);
+    if model.theme.palette_background() != prev_bg {
+        apply_terminal_bg(model.theme.palette_background());
+    }
 }
 
 fn spawn_event_reader(tx: Sender<Msg>, reading_enabled: Arc<AtomicBool>) {
@@ -246,4 +312,26 @@ fn spawn_ticker(tx: Sender<Msg>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn osc11_formats_rgb_color_as_hex_triplet() {
+        // Tokyo Night accent — typical RGB value.
+        assert_eq!(osc11(Color::Rgb(0x7a, 0xa2, 0xf7)), "\x1b]11;#7aa2f7\x1b\\");
+    }
+
+    #[test]
+    fn osc11_formats_named_ansi_colors_via_to_rgb_table() {
+        // Color::Black maps to (0, 0, 0) in palette::to_rgb.
+        assert_eq!(osc11(Color::Black), "\x1b]11;#000000\x1b\\");
+    }
+
+    #[test]
+    fn osc_reset_bg_is_osc_111() {
+        assert_eq!(OSC_RESET_BG, "\x1b]111\x1b\\");
+    }
 }

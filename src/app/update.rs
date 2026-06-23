@@ -17,6 +17,7 @@ use key::{
     handle_confirm_delete, handle_geo_region, handle_routing_mode, handle_sources,
     rebuild_key_event,
 };
+pub use key::{theme_picker_labels, theme_picker_slugs};
 
 /// Minimum interval between Clash-API scrapes. The daemon ticker fires every
 /// 250 ms; we only emit `Effect::FetchTrafficStats` once per second.
@@ -114,6 +115,16 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
             conn_count,
             sampled_at_ms,
         } => handle_traffic_stats_updated(model, up_total, down_total, conn_count, sampled_at_ms),
+        Msg::ThemeChanged(theme) => {
+            // Manual picker override wins: ignore Omarchy watcher events
+            // unless the user has explicitly opted into auto-follow.
+            if model.config.settings.theme != "omarchy" {
+                return vec![];
+            }
+            model.theme = theme;
+            model.needs_redraw = true;
+            vec![]
+        }
     }
 }
 
@@ -2203,5 +2214,168 @@ mod tests {
         assert_eq!(model.traffic, TrafficStats::default());
         assert_eq!(model.last_traffic_sample_at_ms, 0);
         assert!(model.last_traffic_fetch_at.is_none());
+    }
+
+    /// `t` opens the theme picker overlay and positions the cursor on the
+    /// currently committed theme slug.
+    #[test]
+    fn t_key_opens_theme_picker_at_current_theme() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "gruvbox".into();
+        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(model.overlay, Overlay::ThemeSettings);
+        let slugs = crate::app::update::theme_picker_slugs();
+        assert_eq!(
+            slugs.get(model.theme_selected).map(String::as_str),
+            Some("gruvbox")
+        );
+        assert!(model.theme_draft.is_none(), "draft starts cleared on open");
+    }
+
+    /// j/k inside the picker update both the cursor and the draft slug —
+    /// the TUI client maps draft → live `model.theme` on snapshot apply.
+    #[test]
+    fn theme_picker_j_k_set_draft() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "tokyo-night".into();
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        let before = model.theme_selected;
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert_eq!(model.theme_selected, before + 1);
+        let slugs = crate::app::update::theme_picker_slugs();
+        assert_eq!(
+            model.theme_draft.as_deref(),
+            slugs.get(model.theme_selected).map(String::as_str)
+        );
+    }
+
+    /// Enter persists the draft into `settings.theme`, clears the draft,
+    /// closes the overlay, and emits SaveConfig (only when changed).
+    #[test]
+    fn theme_picker_enter_commits_and_saves() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "tokyo-night".into();
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        // Move cursor to a known slug.
+        let slugs = crate::app::update::theme_picker_slugs();
+        let target_idx = slugs
+            .iter()
+            .position(|s| s == "nord")
+            .expect("nord present");
+        model.theme_selected = target_idx;
+        let effects = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert_eq!(model.config.settings.theme, "nord");
+        assert!(model.theme_draft.is_none());
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::SaveConfig)),
+            "Enter must request SaveConfig"
+        );
+    }
+
+    /// Esc discards the draft and closes the overlay without touching
+    /// `settings.theme`.
+    #[test]
+    fn theme_picker_esc_discards_draft() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "tokyo-night".into();
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert!(model.theme_draft.is_some());
+        let _ = update(
+            &mut model,
+            Msg::Key(KeyEvent::new(
+                KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert_eq!(model.overlay, Overlay::None);
+        assert!(model.theme_draft.is_none());
+        assert_eq!(model.config.settings.theme, "tokyo-night");
+    }
+
+    /// `Msg::ThemeChanged` from the Omarchy watcher is a no-op whenever
+    /// the user has picked an explicit non-`"omarchy"` theme.
+    #[test]
+    fn theme_changed_msg_ignored_when_manual_override_set() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "gruvbox".into();
+        let original = model.theme;
+        let _ = update(
+            &mut model,
+            Msg::ThemeChanged(crate::ui::styles::Theme::resolve("nord")),
+        );
+        assert_eq!(model.theme, original, "manual override blocks watcher");
+    }
+
+    /// `Msg::ThemeChanged` applies when the user is in Auto-follow mode.
+    #[test]
+    fn theme_changed_msg_applies_in_omarchy_mode() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.theme = "omarchy".into();
+        let new_theme = crate::ui::styles::Theme::resolve("nord");
+        let _ = update(&mut model, Msg::ThemeChanged(new_theme));
+        assert_eq!(model.theme, new_theme);
+    }
+
+    /// On a non-Omarchy system the picker omits the Auto entry, so the
+    /// list is exactly the 19 bundled palette names.
+    #[test]
+    fn theme_picker_omits_auto_when_omarchy_absent() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let slugs = crate::app::update::theme_picker_slugs();
+        assert!(!slugs.iter().any(|s| s == "omarchy"));
+        assert_eq!(slugs.len(), 19);
     }
 }

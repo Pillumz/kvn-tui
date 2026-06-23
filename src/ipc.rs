@@ -230,6 +230,8 @@ mod tests {
             geo_region_selected: 0,
             dns_selected: 0,
             dns_strategy_draft: None,
+            theme_selected: 0,
+            theme_draft: None,
             geo_updating: false,
             geo_last_updated: None,
             overlay: Overlay::None,

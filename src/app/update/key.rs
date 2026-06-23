@@ -24,11 +24,49 @@ pub(super) fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         Overlay::RoutingMode => handle_routing_mode(model, key),
         Overlay::GeoRegions => handle_geo_region(model, key),
         Overlay::DnsSettings => handle_dns_settings(model, key),
+        Overlay::ThemeSettings => handle_theme_picker(model, key),
         Overlay::Error => {
             model.overlay = Overlay::None;
             vec![]
         }
     }
+}
+
+/// Build the picker list. First entry is the Auto-follow-Omarchy slot
+/// (only present when Omarchy is detected); the remaining entries are
+/// the bundled palette names in alphabetical order.
+pub fn theme_picker_slugs() -> Vec<String> {
+    let mut out = Vec::new();
+    if crate::tui_client::theme_watch::detect_omarchy_theme().is_some() {
+        out.push(crate::tui_client::theme_watch::OMARCHY_SENTINEL.to_string());
+    }
+    out.extend(
+        crate::ui::palette::Palette::bundled_names()
+            .into_iter()
+            .map(str::to_string),
+    );
+    out
+}
+
+/// Friendly label for an entry in the picker. The Auto entry is
+/// annotated with the currently active Omarchy theme so the user can
+/// see what would be applied; all others are returned verbatim.
+fn theme_picker_label(slug: &str) -> String {
+    if slug == crate::tui_client::theme_watch::OMARCHY_SENTINEL {
+        match crate::tui_client::theme_watch::detect_omarchy_theme() {
+            Some(name) => format!("Auto (Omarchy: {name})"),
+            None => "Auto (Omarchy)".to_string(),
+        }
+    } else {
+        slug.to_string()
+    }
+}
+
+pub fn theme_picker_labels() -> Vec<String> {
+    theme_picker_slugs()
+        .iter()
+        .map(|s| theme_picker_label(s))
+        .collect()
 }
 
 pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
@@ -144,6 +182,15 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.overlay = Overlay::DnsSettings;
             model.dns_selected = 0;
             model.dns_strategy_draft = None;
+        }
+        KeyCode::Char('t') => {
+            let slugs = theme_picker_slugs();
+            model.theme_selected = slugs
+                .iter()
+                .position(|s| s == &model.config.settings.theme)
+                .unwrap_or(0);
+            model.theme_draft = None;
+            model.overlay = Overlay::ThemeSettings;
         }
 
         // Help
@@ -383,6 +430,60 @@ pub(super) fn handle_routing_mode(model: &mut Model, key: KeyEvent) -> Vec<Effec
             }
         }
         KeyCode::Char('q') | KeyCode::Esc => {
+            model.overlay = Overlay::None;
+        }
+        _ => {}
+    }
+    vec![]
+}
+
+/// Handle keys inside the theme picker overlay. j/k drive a live preview
+/// of the highlighted entry (the daemon stores the draft slug; the TUI
+/// client resolves it into the actual `Theme` on snapshot apply).
+pub(super) fn handle_theme_picker(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let slugs = theme_picker_slugs();
+    if slugs.is_empty() {
+        model.overlay = Overlay::None;
+        return vec![];
+    }
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            crate::ui::nav::select_next(&mut model.theme_selected, slugs.len());
+            model.theme_draft = slugs.get(model.theme_selected).cloned();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            crate::ui::nav::select_prev(&mut model.theme_selected);
+            model.theme_draft = slugs.get(model.theme_selected).cloned();
+        }
+        KeyCode::Char('g') => {
+            crate::ui::nav::select_first(&mut model.theme_selected);
+            model.theme_draft = slugs.first().cloned();
+        }
+        KeyCode::Char('G') => {
+            crate::ui::nav::select_last(&mut model.theme_selected, slugs.len());
+            model.theme_draft = slugs.get(model.theme_selected).cloned();
+        }
+        KeyCode::Enter => {
+            let Some(slug) = slugs.get(model.theme_selected).cloned() else {
+                return vec![];
+            };
+            let changed = model.config.settings.theme != slug;
+            model.config.settings.theme = slug.clone();
+            model.theme_draft = None;
+            model.overlay = Overlay::None;
+            if changed {
+                let mut effects = vec![Effect::SaveConfig];
+                push_status(
+                    &mut effects,
+                    model,
+                    crate::app::model::AppStatus::Info(format!("Theme: {}", slug)),
+                );
+                return effects;
+            }
+            return vec![];
+        }
+        KeyCode::Char('q') | KeyCode::Esc => {
+            model.theme_draft = None;
             model.overlay = Overlay::None;
         }
         _ => {}

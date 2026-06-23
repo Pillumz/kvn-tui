@@ -18,6 +18,12 @@ const TRAFFIC_PANEL_HEIGHT: u16 = 3;
 pub fn draw(frame: &mut Frame, model: &Model) {
     let area = frame.area();
 
+    // Paint the palette's background across the whole frame first so that
+    // every widget below — most of which set only `fg` — inherits a
+    // theme-consistent background instead of the terminal default. Popups
+    // override with their own `popup_bg()` (currently the same color).
+    frame.render_widget(Block::default().style(model.theme.background()), area);
+
     // Top-level vertical layout: optional traffic header, main content, status bar.
     let show_traffic =
         model.connection == ConnectionState::Connected && area.height > TRAFFIC_PANEL_HEIGHT + 5;
@@ -45,19 +51,22 @@ pub fn draw(frame: &mut Frame, model: &Model) {
     draw_main(frame, model, main_area);
     draw_status_bar(frame, model, status_area);
 
+    let theme = &model.theme;
     match model.overlay {
-        Overlay::Help => draw_help(frame, area),
+        Overlay::Help => draw_help(frame, theme, area),
         Overlay::ConfirmDelete => draw_confirm_delete(frame, model, area),
-        Overlay::Error => draw_error(frame, area, model.status.text()),
+        Overlay::Error => draw_error(frame, theme, area, model.status.text()),
         Overlay::RoutingMode => draw_routing_mode(frame, model, area),
         Overlay::GeoRegions => draw_geo_region(frame, model, area),
         Overlay::DnsSettings => draw_dns_settings(frame, model, area),
+        Overlay::ThemeSettings => draw_theme_settings(frame, model, area),
         Overlay::None => {}
     }
 }
 
 /// Draw the main content area with the Sources list and logs.
 fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
+    let theme = &model.theme;
     let content_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -68,7 +77,7 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
     let log_block = Block::default()
         .title(" Logs ")
         .borders(Borders::ALL)
-        .border_style(Theme::border());
+        .border_style(theme.border());
 
     // Show the most recent log lines that fit in the available area.
     let available_height = content_chunks[1].height.saturating_sub(2) as usize;
@@ -79,9 +88,9 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
         .skip(start)
         .map(|l| {
             let style = if l.starts_with("[error]") {
-                Theme::error()
+                theme.error()
             } else {
-                Theme::normal()
+                theme.normal()
             };
             Line::from(Span::styled(l.as_str(), style))
         })
@@ -98,28 +107,29 @@ fn draw_main(frame: &mut Frame, model: &Model, area: Rect) {
 /// inside a bordered block. Driven by `model.traffic`, updated ~1 Hz by the
 /// daemon.
 fn draw_traffic_panel(frame: &mut Frame, model: &Model, area: Rect) {
+    let theme = &model.theme;
     let t = &model.traffic;
     let line = Line::from(vec![
-        Span::styled("↑ ", Theme::success()),
-        Span::styled(format_bps(t.up_rate_bps), Theme::normal()),
+        Span::styled("↑ ", theme.success()),
+        Span::styled(format_bps(t.up_rate_bps), theme.normal()),
         Span::raw("   "),
-        Span::styled("↓ ", Theme::accent()),
-        Span::styled(format_bps(t.down_rate_bps), Theme::normal()),
+        Span::styled("↓ ", theme.accent()),
+        Span::styled(format_bps(t.down_rate_bps), theme.normal()),
         Span::raw("     "),
-        Span::styled("Total ", Theme::border()),
-        Span::styled("↑ ", Theme::success()),
-        Span::styled(format_bytes(t.up_total), Theme::normal()),
+        Span::styled("Total ", theme.border()),
+        Span::styled("↑ ", theme.success()),
+        Span::styled(format_bytes(t.up_total), theme.normal()),
         Span::raw("   "),
-        Span::styled("↓ ", Theme::accent()),
-        Span::styled(format_bytes(t.down_total), Theme::normal()),
+        Span::styled("↓ ", theme.accent()),
+        Span::styled(format_bytes(t.down_total), theme.normal()),
         Span::raw("     "),
-        Span::styled(format!("{}", t.conn_count), Theme::accent()),
-        Span::styled(" connections", Theme::normal()),
+        Span::styled(format!("{}", t.conn_count), theme.accent()),
+        Span::styled(" connections", theme.normal()),
     ]);
     let block = Block::default()
         .title(" Traffic ")
         .borders(Borders::ALL)
-        .border_style(Theme::border());
+        .border_style(theme.border());
     let paragraph = Paragraph::new(line).block(block);
     frame.render_widget(paragraph, area);
 }
@@ -131,9 +141,8 @@ fn draw_status_bar(frame: &mut Frame, model: &Model, area: Rect) {
 }
 
 /// Draw the help popup overlay.
-fn draw_help(frame: &mut Frame, area: Rect) {
-    let header =
-        Row::new(vec!["Key", "Action"]).style(Theme::accent().add_modifier(Modifier::BOLD));
+fn draw_help(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let header = Row::new(vec!["Key", "Action"]).style(theme.accent().add_modifier(Modifier::BOLD));
 
     let rows: Vec<Row> = vec![
         Row::new(vec!["j / Down", "Move down"]),
@@ -152,6 +161,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Row::new(vec!["a", "Toggle auto-connect"]),
         Row::new(vec!["K", "Toggle kill switch"]),
         Row::new(vec!["D", "DNS settings"]),
+        Row::new(vec!["t", "Theme picker"]),
         Row::new(vec!["r", "Reconnect"]),
         Row::new(vec!["s", "Stop / disconnect"]),
         Row::new(vec!["q / Esc", "Detach TUI"]),
@@ -168,8 +178,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
-        .border_style(Theme::border())
-        .style(Theme::popup_bg());
+        .border_style(theme.border())
+        .style(theme.popup_bg());
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -182,52 +192,68 @@ fn draw_help(frame: &mut Frame, area: Rect) {
 /// Draw the delete confirmation dialog.
 fn draw_confirm_delete(frame: &mut Frame, model: &Model, area: Rect) {
     use crate::app::model::SourceRow;
+    let theme = &model.theme;
     let message = match model.selected_row() {
         Some(SourceRow::SubscriptionHeader(_)) => "Delete selected subscription and its profiles?",
         _ => "Delete selected profile?",
     };
     draw_modal(
         frame,
+        theme,
         area,
         " Confirm ",
         vec![
-            Line::from(Span::styled(message, Theme::error())),
+            Line::from(Span::styled(message, theme.error())),
             Line::from(""),
             Line::from("Press y to confirm, n to cancel"),
         ],
+        POPUP_HEIGHT_PERCENT,
     );
 }
 
 /// Draw an error message popup.
-fn draw_error(frame: &mut Frame, area: Rect, message: &str) {
+fn draw_error(frame: &mut Frame, theme: &Theme, area: Rect, message: &str) {
     draw_modal(
         frame,
+        theme,
         area,
         " Error ",
         vec![
-            Line::from(Span::styled("Error", Theme::error())),
+            Line::from(Span::styled("Error", theme.error())),
             Line::from(""),
             Line::from(message),
             Line::from(""),
             Line::from("Press any key to dismiss"),
         ],
+        POPUP_HEIGHT_PERCENT,
     );
 }
 
 const POPUP_WIDTH_PERCENT: u16 = 60;
 const POPUP_HEIGHT_PERCENT: u16 = 50;
+/// Taller variant for overlays whose list grows past ~6 items (e.g. the
+/// theme picker with 19+ entries). Keeps text inside the visible region
+/// on standard 24-row terminals.
+const POPUP_HEIGHT_PERCENT_TALL: u16 = 90;
 
 /// Helper to render a centered popup with a border and text.
-fn draw_modal(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line>) {
-    let popup_area = centered_rect(POPUP_WIDTH_PERCENT, POPUP_HEIGHT_PERCENT, area);
+fn draw_modal(
+    frame: &mut Frame,
+    theme: &Theme,
+    area: Rect,
+    title: &str,
+    lines: Vec<Line>,
+    height_percent: u16,
+) {
+    let popup_area = centered_rect(POPUP_WIDTH_PERCENT, height_percent, area);
 
     frame.render_widget(Clear, popup_area);
 
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Theme::border())
-        .style(Theme::popup_bg());
+        .border_style(theme.border())
+        .style(theme.popup_bg());
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -247,12 +273,14 @@ fn draw_routing_mode(frame: &mut Frame, model: &Model, area: Rect) {
         .position(|m| *m == model.config.settings.geo_routing.mode());
     draw_selection_modal(
         frame,
+        &model.theme,
         area,
         "Select routing mode",
         " Routing Mode ",
         &labels,
         model.routing_selected,
         active,
+        POPUP_HEIGHT_PERCENT,
     );
 }
 
@@ -276,12 +304,14 @@ fn draw_geo_region(frame: &mut Frame, model: &Model, area: Rect) {
         .and_then(|r| GeoRegion::ALL.iter().position(|x| *x == r));
     draw_selection_modal(
         frame,
+        &model.theme,
         area,
         "Select geo region",
         " Geo Region ",
         &labels,
         model.geo_region_selected,
         active,
+        POPUP_HEIGHT_PERCENT,
     );
 }
 
@@ -311,12 +341,36 @@ fn draw_dns_settings(frame: &mut Frame, model: &Model, area: Rect) {
     let label_refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
     draw_selection_modal(
         frame,
+        &model.theme,
         area,
         "DNS settings",
         " DNS ",
         &label_refs,
         model.dns_selected,
         current_dns_preset_index(dns),
+        POPUP_HEIGHT_PERCENT,
+    );
+}
+
+/// Draw the theme picker overlay. Lists all bundled palettes plus an
+/// optional Auto entry (when Omarchy is detected) that maps to the
+/// `"omarchy"` sentinel slug. The active row is the one matching the
+/// committed `Settings.theme`; the cursor tracks `model.theme_selected`.
+fn draw_theme_settings(frame: &mut Frame, model: &Model, area: Rect) {
+    let slugs = crate::app::update::theme_picker_slugs();
+    let labels: Vec<String> = crate::app::update::theme_picker_labels();
+    let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let active = slugs.iter().position(|s| s == &model.config.settings.theme);
+    draw_selection_modal(
+        frame,
+        &model.theme,
+        area,
+        "Select theme",
+        " Theme ",
+        &label_refs,
+        model.theme_selected,
+        active,
+        POPUP_HEIGHT_PERCENT_TALL,
     );
 }
 
@@ -354,28 +408,31 @@ fn current_dns_preset_index(dns: &crate::config::profile::DnsConfig) -> Option<u
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_selection_modal(
     frame: &mut Frame,
+    theme: &Theme,
     area: Rect,
     heading: &str,
     modal_title: &str,
     items: &[&str],
     selected: usize,
     active: Option<usize>,
+    height_percent: u16,
 ) {
     let mut lines: Vec<Line> = vec![
-        Line::from(Span::styled(heading, Theme::accent())),
+        Line::from(Span::styled(heading, theme.accent())),
         Line::from(""),
     ];
     for (i, label) in items.iter().enumerate() {
         let marker = if i == selected { "> " } else { "  " };
         let is_active = active == Some(i);
         let style = if is_active {
-            Theme::success().add_modifier(Modifier::BOLD)
+            theme.success().add_modifier(Modifier::BOLD)
         } else if i == selected {
-            Theme::accent().add_modifier(Modifier::BOLD)
+            theme.accent().add_modifier(Modifier::BOLD)
         } else {
-            Theme::normal()
+            theme.normal()
         };
         lines.push(Line::from(Span::styled(
             format!("{}{}", marker, label),
@@ -384,15 +441,16 @@ fn draw_selection_modal(
     }
     lines.push(Line::from(""));
     lines.push(Line::from("j/k navigate, Enter confirm, Esc cancel"));
-    draw_modal(frame, area, modal_title, lines);
+    draw_modal(frame, theme, area, modal_title, lines, height_percent);
 }
 
 /// Draw the unified Sources list: standalone profiles and subscription trees.
 fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
+    let theme = &model.theme;
     let block = Block::default()
         .title(" Sources ")
         .borders(Borders::ALL)
-        .border_style(Theme::border());
+        .border_style(theme.border());
 
     let inner_width = area.width.saturating_sub(2) as usize;
     let mut lines: Vec<Line> = Vec::new();
@@ -438,7 +496,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
         if !standalone.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("Standalone profiles ({})", standalone.len()),
-                Theme::accent().add_modifier(Modifier::BOLD),
+                theme.accent().add_modifier(Modifier::BOLD),
             )));
             let last = standalone.len() - 1;
             for (pos, (row_idx, profile_idx)) in standalone.iter().enumerate() {
@@ -459,9 +517,9 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
             let header_idx = sub_header_idx[sub_idx];
             let is_selected = model.selected == header_idx;
             let header_style = if is_selected {
-                Theme::selected()
+                theme.selected()
             } else {
-                Theme::normal()
+                theme.normal()
             };
             let profiles = &sub_profile_rows[sub_idx];
             let header_text = format!(
@@ -573,6 +631,7 @@ fn profile_line(
 ) -> Line<'static> {
     use ratatui::text::Span;
 
+    let theme = &model.theme;
     let profile = &model.config.profiles[profile_idx];
     let is_selected = model.selected == row_idx;
 
@@ -589,13 +648,13 @@ fn profile_line(
     let addr_col = truncate_to_visual_width(&addr_port, addr_width);
 
     let style = if is_selected && is_connected {
-        Theme::selected_connected()
+        theme.selected_connected()
     } else if is_selected {
-        Theme::selected()
+        theme.selected()
     } else if is_connected {
-        Theme::success()
+        theme.success()
     } else {
-        Theme::normal()
+        theme.normal()
     };
 
     let addr_col_padded = if is_selected {
@@ -779,7 +838,7 @@ mod tests {
         let frame = terminal
             .draw(|frame| {
                 let area = frame.area();
-                draw_help(frame, area);
+                draw_help(frame, &Theme::legacy(), area);
             })
             .unwrap();
 
@@ -935,6 +994,45 @@ mod tests {
         // Cursor on the "Strategy" row so it gets highlighted in the snapshot.
         model.dns_selected = 4;
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 24));
+    }
+
+    /// Theme picker overlay rendered with the dark default palette.
+    /// Pins the layout, label format, and active-row highlighting.
+    #[test]
+    fn draw_theme_settings_overlay_snapshot() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.overlay = Overlay::ThemeSettings;
+        model.config.settings.theme = "gruvbox".into();
+        let slugs = crate::app::update::theme_picker_slugs();
+        model.theme_selected = slugs
+            .iter()
+            .position(|s| s == &model.config.settings.theme)
+            .unwrap_or(0);
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 30));
+    }
+
+    /// Theme picker rendered with a light palette — sanity check for
+    /// contrast on backgrounds where the dark-mode defaults don't apply.
+    #[test]
+    fn draw_theme_settings_overlay_light_snapshot() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
+        model.overlay = Overlay::ThemeSettings;
+        model.config.settings.theme = "catppuccin-latte".into();
+        model.theme = crate::ui::styles::Theme::resolve(&model.config.settings.theme);
+        let slugs = crate::app::update::theme_picker_slugs();
+        model.theme_selected = slugs
+            .iter()
+            .position(|s| s == &model.config.settings.theme)
+            .unwrap_or(0);
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 30));
     }
 
     #[test]

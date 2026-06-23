@@ -392,6 +392,8 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         geo_region_selected: model.geo_region_selected,
         dns_selected: model.dns_selected,
         dns_strategy_draft: model.dns_strategy_draft.clone(),
+        theme_selected: model.theme_selected,
+        theme_draft: model.theme_draft.clone(),
         geo_updating: model.geo_updating,
         geo_last_updated: model.geo_last_updated.clone(),
         overlay: model.overlay,
