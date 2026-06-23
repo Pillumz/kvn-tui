@@ -39,6 +39,7 @@
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — split-pane view interleaves sing-box output with app events; both streams are also persisted to `sing-box.log` and `app.log` on disk
 - **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
+- **Themable** — 19 bundled [Omarchy](https://omarchy.org/) palettes (gruvbox, tokyo-night, catppuccin, nord, kanagawa, rose-pine, …) compiled into the binary; pick interactively via `t` and persist the choice in `profiles.json`. On Omarchy systems the `omarchy` slug auto-follows `~/.config/omarchy/current/theme.name` and updates live on `omarchy theme set …`. OSC 11 also repaints the terminal's own padding so the whole window matches the theme
 
 ---
 
@@ -269,6 +270,7 @@ Press `?` at any time to see the full key map.
 | `o` | Select geo region |
 | `K` | Toggle kill switch |
 | `D` | DNS settings (presets, strategy, fake-IP) |
+| `t` | Theme picker (live preview, Enter to persist) |
 | `a` | Toggle auto-connect |
 
 **Application**
@@ -302,6 +304,8 @@ When `auto_connect` is enabled, the application stores `last_connected_profile` 
 - `global` — skip geo downloads, enable Global only
 
 On the very first launch (or after upgrading from an older version without `geo_region`), a modal overlay forces you to pick a region before the main UI becomes usable.
+
+`settings.theme` is a string slug naming the active color palette. Default: `tokyo-night`. The reserved slug `omarchy` is a sentinel that auto-follows `~/.config/omarchy/current/theme.name` (and only appears as the `Auto` entry in the picker when Omarchy is installed). Any of the 19 bundled palettes can be selected by name — see `themes/*.toml` in the repository for the canonical list.
 
 Geo rule-set databases are cached in:
 

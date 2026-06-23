@@ -26,7 +26,8 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `tui_client` | `src/tui_client.rs` | TUI client: connects to daemon via Unix socket, renders UI, forwards input, reads clipboard |
 | `ipc` | `src/ipc.rs` | NDJSON protocol over Unix domain socket for daemon ↔ TUI client communication |
 | `test_helpers` | `src/test_helpers.rs` | Shared test utilities (e.g. `model_with_profiles`)
-| `ui` | `src/ui.rs`, `src/ui/layout.rs`, `src/ui/widgets.rs`, `src/ui/styles.rs`, `src/ui/nav.rs` | ratatui rendering (used by TUI client only), layout splits, widget definitions, color theme, navigation helpers |
+| `ui` | `src/ui.rs`, `src/ui/layout.rs`, `src/ui/widgets.rs`, `src/ui/styles.rs`, `src/ui/palette.rs`, `src/ui/nav.rs` | ratatui rendering (used by TUI client only), layout splits, widget definitions, palette-driven `Theme`, navigation helpers |
+| `palette` | `src/ui/palette.rs`, `themes/*.toml`, `build.rs` | 19 vendored Omarchy palettes; `build.rs` compiles `themes/*.toml` into a `BUNDLED` static at compile time (no runtime TOML parsing) |
 | `config` | `src/config.rs`, `src/config/profile.rs`, `src/config/subscription.rs` | JSON config I/O, profile and subscription struct definitions, subscription fetcher |
 | `singbox` | `src/singbox.rs`, `src/singbox/config.rs`, `src/singbox/runner.rs`, `src/singbox/clash_api.rs`, `src/singbox/process_handle.rs` | Process lifecycle: write temp config, run `sing-box check`, spawn `sing-box run`, kill on disconnect; Clash API client for live traffic stats; `Child` wrapper |
 | `geo` | `src/geo.rs` | Download and cache geoip/geosite rule-sets for sing-box routing |
@@ -38,6 +39,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 | `services` | `src/services.rs`, `src/services/log_tailer.rs`, `src/services/waybar.rs`, `src/services/suspend.rs` | Background services: log tailer, waybar state I/O, suspend watcher (all run inside the daemon) |
 | `clipboard` | `src/tui_client/clipboard.rs` | System clipboard integration; auto-detects Wayland (`wl-paste` / `wl-copy`) or X11 (`xclip`, falls back to `xsel`); reads clipboard content and passes it to `parse_share_link` or the subscription fetcher |
 | `editor` | `src/tui_client/editor.rs` | Launch `$EDITOR` / `$VISUAL` on `profiles.json`, temporarily restore terminal |
+| `theme_watch` | `src/tui_client/theme_watch.rs` | Resolves `settings.theme` slug to a `Theme` (with `"omarchy"` sentinel falling back to `tokyo-night`); spawns a `notify` watcher on `~/.config/omarchy/current/` that emits `Msg::ThemeChanged` on theme.name changes; no-op when Omarchy isn't installed |
 
 ---
 
@@ -145,7 +147,7 @@ See the `release` skill in `.agents/skills/release/SKILL.md` for the full versio
 
   The `TOTAL` line shows region / function / line coverage. Both region and line numbers must be ≥ 85 % for CI to pass.
 - The CI gate parses the `TOTAL` line directly because `cargo-llvm-cov --fail-under-*` flags are silently no-op in the 0.8.x series.
-- 0 %-coverage I/O wrappers (`daemon.rs`, `tui_client.rs`, `main.rs`, `services/killswitch.rs`, `services/suspend.rs`, `tui_client/clipboard.rs`, `singbox/clash_api.rs`, install_* in `cli.rs`) are accepted as-is — they wrap subprocesses, DBus, Unix sockets, and HTTP, which need integration harnesses out of scope for unit tests. **Do not rewrite them just to add fake-based tests.** Cover new logic with pure-function tests instead.
+- 0 %-coverage I/O wrappers (`daemon.rs`, `tui_client.rs`, `main.rs`, `services/killswitch.rs`, `services/suspend.rs`, `tui_client/clipboard.rs`, `tui_client/theme_watch.rs` watcher thread, `singbox/clash_api.rs`, install_* in `cli.rs`) are accepted as-is — they wrap subprocesses, DBus, Unix sockets, HTTP, and filesystem watchers, which need integration harnesses out of scope for unit tests. **Do not rewrite them just to add fake-based tests.** Cover new logic with pure-function tests instead.
 
 ---
 
@@ -228,6 +230,15 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - **Active-state detection**: `current_dns_preset_index` (in `ui/layout.rs`) structurally matches `dns.servers + final_server` against the four presets, ignoring any fake-IP server alongside; `draw_selection_modal` paints the active item bold green via `Theme::success()`. This generic active-index parameter is also used by the routing-mode and geo-region overlays.
 - **Status bar**: a `[DNS: <kind>]` badge derives its label from the final server's `kind_label` (`DoH` / `DoT` / `DoQ` / `UDP` / `TCP` / `local`) or `fakeip` when `fakeip_enabled` is true.
 
+### Theme System
+- **Data**: every UI style is derived from a `Palette` (16 ANSI colors + 6 semantic colors: accent, cursor, foreground, background, selection_foreground, selection_background). `Theme` holds a `Palette` and exposes `&self` methods (`accent`, `normal`, `status`, `error`, `success`, `border`, `selected`, `selected_connected`, `popup_bg`, `background`).
+- **Bundling**: `themes/*.toml` (19 Omarchy palettes vendored as-is from `~/.local/share/omarchy/themes/<name>/colors.toml`) are compiled into `OUT_DIR/bundled_palettes.rs` by `build.rs` (build-dep `toml`). No runtime TOML parsing — `Palette::lookup(slug)` is a static array scan.
+- **Active theme resolution**: `tui_client::theme_watch::resolve_active(slug)` is the single source of truth, called both at startup and on `Msg::ThemeChanged`. The reserved slug `"omarchy"` reads `~/.config/omarchy/current/theme.name` and resolves the result; any other slug looks up a bundled palette (with `Theme::legacy()` as the catch-all fallback for unknown names).
+- **In-TUI picker** (`Overlay::ThemeSettings`, key `t`): mirrors the DNS overlay draft pattern. `j`/`k` update `Model.theme_selected` and `Model.theme_draft`; the TUI client recomputes `model.theme` from the draft on every snapshot apply (live preview). Enter persists `settings.theme = <slug>` and emits `Effect::SaveConfig`. Esc clears the draft and reverts. The Auto-entry (slug `"omarchy"`) is shown only when `detect_omarchy_theme()` returns `Some` — non-Omarchy users see only the 19 bundled palettes.
+- **Watcher**: spawned only when `~/.config/omarchy/current/` exists. Watches the parent directory (Omarchy swaps the whole `current/` tree atomically, so watching `theme.name` directly is unreliable). Emits `Msg::ThemeChanged(Theme)` to the TUI channel. The update reducer applies it only when `settings.theme == "omarchy"`; manual picker overrides win.
+- **Frame background**: `draw()` paints the whole `frame.area()` with `theme.background()` before any other widget so cells with `Style::default()` (no explicit `bg`) inherit the palette color instead of falling through to the terminal default. Popups continue to use the same color via `theme.popup_bg()`; border-only blocks only set `fg`, so the fill survives.
+- **Terminal padding (OSC 11)**: ratatui can't reach the pixel padding between the character grid and the window border. `tui_client::apply_terminal_bg(color)` emits `ESC ] 11 ; #RRGGBB ESC \\` so the terminal emulator repaints its own background; unsupported emulators silently ignore. Called on startup, on every effective-bg change in `apply_snapshot`, and in `Msg::ThemeChanged`. On exit `reset_terminal_bg()` emits `ESC ] 111 ESC \\` (OSC 111) to restore the user's terminal default. Both calls are guarded by `io::stdout().is_terminal()` to stay silent in pipes/CI.
+
 ### State I/O
 - `services/waybar.rs` writes a small JSON file (`state.json`) on every connect/disconnect. It stores connection status, active profile name, and sing-box PID.
 - Used by the `--waybar-status` CLI flag and for crash recovery (state is cleared on startup).
@@ -263,7 +274,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 The TEA update function (`app::update::update`) must remain free of I/O, threads, and system calls. Side effects are declared as `Effect` values and executed by the daemon runtime.
 
 Rules of thumb:
-- `app::update::update(model, msg) -> Vec<Effect>` must not call functions from `services`, `geo`, `paths`, `atomic_write`, `config::load_config`, `config::subscription`, `singbox::clash_api`, `singbox::runner`, `tui_client::clipboard`, `tui_client::editor`, or perform any file/network/process I/O.
+- `app::update::update(model, msg) -> Vec<Effect>` must not call functions from `services`, `geo`, `paths`, `atomic_write`, `config::load_config`, `config::subscription`, `singbox::clash_api`, `singbox::runner`, `tui_client::clipboard`, `tui_client::editor`, or perform any file/network/process I/O. **Documented exception**: `theme_picker_slugs()` (used by the `t` key handler and `handle_theme_picker`) calls `theme_watch::detect_omarchy_theme()`, which does a single small `fs::read_to_string` of `~/.config/omarchy/current/theme.name` to decide whether to show the Auto entry. Cheap, deterministic, and scoped to a key press; promoted to "OK" because the alternative (caching in `Model`) costs more clarity than it saves. The full `Theme` resolution stays out of `update`: the picker handler only mutates `theme_draft`/`settings.theme`, and the TUI client recomputes `model.theme` via `resolve_active` on snapshot apply.
 - `Model::set_status` is pure (mutates only in-memory state). Any message that should also be persisted to the application log must return `Effect::AppendAppLog`.
 - `Model::new` is allowed to perform initialization I/O (load config, read `state.json`, etc.).
 - `singbox::config::generate_config` is pure: it receives geo file availability (`GeoAvailability`) from the caller and does not touch the file system.
