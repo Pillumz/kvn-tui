@@ -22,7 +22,7 @@ mod test_helpers;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::app::model::Model;
 use crate::paths::ensure_config_dirs;
@@ -35,16 +35,22 @@ fn main() -> Result<()> {
         return result;
     }
 
-    // Initialize logging.
+    // Ensure configuration directories exist before reading the config so
+    // logging can be initialized from `settings.log_level`.
+    ensure_config_dirs()?;
+
+    let cfg = crate::config::load_config().unwrap_or_default();
+    let (filter, bad_level) = resolve_log_filter(cfg.settings.log_level.as_str());
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with(filter)
         .with(tracing_subscriber::fmt::layer().without_time())
         .init();
-
-    // Ensure configuration directories exist.
-    ensure_config_dirs()?;
+    if let Some(invalid) = bad_level {
+        tracing::warn!(
+            "settings.log_level={:?} is not one of trace/debug/info/warn/error; using info",
+            invalid
+        );
+    }
 
     if cli.daemon {
         let model = Model::new()?;
@@ -60,6 +66,20 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the tracing filter from environment and config. Precedence:
+/// `RUST_LOG` > `settings.log_level` (if it parses as one of the five
+/// canonical levels) > `info`. Returns the bad value as the second tuple
+/// element so the caller can warn after the subscriber is live.
+fn resolve_log_filter(level: &str) -> (EnvFilter, Option<String>) {
+    if let Ok(filter) = EnvFilter::try_from_default_env() {
+        return (filter, None);
+    }
+    match level {
+        "trace" | "debug" | "info" | "warn" | "error" => (EnvFilter::new(level), None),
+        other => (EnvFilter::new("info"), Some(other.to_string())),
+    }
 }
 
 /// Re-exec ourselves as `kvn-tui --daemon` in a fresh process group so the
@@ -81,4 +101,54 @@ fn spawn_daemon_process() -> Result<()> {
         .spawn()
         .context("Failed to spawn daemon process")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_log_filter;
+
+    fn with_no_rust_log<F: FnOnce() -> R, R>(f: F) -> R {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("RUST_LOG");
+        unsafe { std::env::remove_var("RUST_LOG") };
+        let result = f();
+        match previous {
+            Some(v) => unsafe { std::env::set_var("RUST_LOG", v) },
+            None => unsafe { std::env::remove_var("RUST_LOG") },
+        }
+        result
+    }
+
+    #[test]
+    fn resolve_log_filter_accepts_five_levels() {
+        with_no_rust_log(|| {
+            for level in ["trace", "debug", "info", "warn", "error"] {
+                let (_filter, bad) = resolve_log_filter(level);
+                assert!(bad.is_none(), "level {level} should be accepted");
+            }
+        });
+    }
+
+    #[test]
+    fn resolve_log_filter_falls_back_on_garbage() {
+        with_no_rust_log(|| {
+            for bad in ["verbose", "", "INFO ", "kvn_tui=debug"] {
+                let (_filter, reported) = resolve_log_filter(bad);
+                assert_eq!(reported.as_deref(), Some(bad));
+            }
+        });
+    }
+
+    #[test]
+    fn resolve_log_filter_env_overrides_config() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("RUST_LOG");
+        unsafe { std::env::set_var("RUST_LOG", "warn") };
+        let (_filter, bad) = resolve_log_filter("debug");
+        assert!(bad.is_none());
+        match previous {
+            Some(v) => unsafe { std::env::set_var("RUST_LOG", v) },
+            None => unsafe { std::env::remove_var("RUST_LOG") },
+        }
+    }
 }

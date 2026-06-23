@@ -965,6 +965,12 @@ pub struct Settings {
     /// names a bundled palette (see `src/ui/palette.rs`).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Tracing filter applied at startup. Accepted values:
+    /// `trace`, `debug`, `info`, `warn`, `error`. Anything else falls back
+    /// to `info` at read time. The `RUST_LOG` env var, if set, wins over
+    /// this field. Edited only via the JSON editor (`e` in the TUI).
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
 }
 
 fn default_tun_interface() -> String {
@@ -982,6 +988,10 @@ pub fn default_theme() -> String {
     "tokyo-night".to_string()
 }
 
+pub fn default_log_level() -> String {
+    "info".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -994,6 +1004,7 @@ impl Default for Settings {
             kill_switch: false,
             last_connected_profile: None,
             theme: default_theme(),
+            log_level: default_log_level(),
         }
     }
 }
@@ -1262,6 +1273,31 @@ mod tests {
         assert!(s.geo_routing.current_region.is_none());
         assert!(s.geo_routing.selected_region_modes.is_empty());
         assert_eq!(s.geo_routing.mode(), RoutingMode::Global);
+        assert_eq!(s.log_level, "info");
+    }
+
+    #[test]
+    fn settings_log_level_round_trips_through_json() {
+        let s = Settings {
+            log_level: "debug".to_string(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"log_level\":\"debug\""));
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.log_level, "debug");
+    }
+
+    #[test]
+    fn settings_log_level_defaults_when_absent() {
+        let json = r#"{
+            "tun_interface": "tun0",
+            "dns_strategy": "prefer_ipv4",
+            "geo_routing": {},
+            "auto_connect": false
+        }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.log_level, "info");
     }
 
     #[test]
