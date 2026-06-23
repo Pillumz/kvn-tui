@@ -76,9 +76,11 @@ fn resolve_log_filter(level: &str) -> (EnvFilter, Option<String>) {
     if let Ok(filter) = EnvFilter::try_from_default_env() {
         return (filter, None);
     }
-    match level {
-        "trace" | "debug" | "info" | "warn" | "error" => (EnvFilter::new(level), None),
-        other => (EnvFilter::new("info"), Some(other.to_string())),
+    let normalized = crate::config::profile::normalized_log_level(level);
+    if normalized == level {
+        (EnvFilter::new(normalized), None)
+    } else {
+        (EnvFilter::new(normalized), Some(level.to_string()))
     }
 }
 

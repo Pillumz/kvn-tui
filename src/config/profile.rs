@@ -992,6 +992,21 @@ pub fn default_log_level() -> String {
     "info".to_string()
 }
 
+/// Map a `settings.log_level` value to one of the five canonical levels
+/// (`trace`/`debug`/`info`/`warn`/`error`). Anything else returns `"info"`.
+/// Used both by the tracing filter in `main.rs` and by the sing-box config
+/// generator, so the level the user sets in the JSON applies to both.
+pub fn normalized_log_level(level: &str) -> &'static str {
+    match level {
+        "trace" => "trace",
+        "debug" => "debug",
+        "info" => "info",
+        "warn" => "warn",
+        "error" => "error",
+        _ => "info",
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -1286,6 +1301,20 @@ mod tests {
         assert!(json.contains("\"log_level\":\"debug\""));
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.log_level, "debug");
+    }
+
+    #[test]
+    fn normalized_log_level_passes_canonical_levels_through() {
+        for level in ["trace", "debug", "info", "warn", "error"] {
+            assert_eq!(normalized_log_level(level), level);
+        }
+    }
+
+    #[test]
+    fn normalized_log_level_falls_back_to_info_on_garbage() {
+        for bad in ["verbose", "", "INFO", "fatal", "panic", "kvn_tui=debug"] {
+            assert_eq!(normalized_log_level(bad), "info");
+        }
     }
 
     #[test]

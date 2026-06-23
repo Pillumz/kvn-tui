@@ -65,7 +65,7 @@ pub fn generate_config(
 
     let mut config = json!({
         "log": {
-            "level": "debug",
+            "level": crate::config::profile::normalized_log_level(&settings.log_level),
             "output": crate::paths::singbox_log_path().to_string_lossy(),
             "timestamp": true
         },
@@ -391,6 +391,36 @@ mod tests {
         assert!(config.get("outbounds").is_some());
         assert!(config.get("route").is_some());
         assert!(config.get("experimental").is_some());
+    }
+
+    #[test]
+    fn generated_config_log_level_defaults_to_info() {
+        let profile = test_profile();
+        let settings = Settings::default();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        assert_eq!(config["log"]["level"].as_str(), Some("info"));
+    }
+
+    #[test]
+    fn generated_config_log_level_follows_settings() {
+        let profile = test_profile();
+        let settings = Settings {
+            log_level: "debug".to_string(),
+            ..Settings::default()
+        };
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        assert_eq!(config["log"]["level"].as_str(), Some("debug"));
+    }
+
+    #[test]
+    fn generated_config_log_level_falls_back_on_garbage() {
+        let profile = test_profile();
+        let settings = Settings {
+            log_level: "verbose".to_string(),
+            ..Settings::default()
+        };
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        assert_eq!(config["log"]["level"].as_str(), Some("info"));
     }
 
     #[test]
