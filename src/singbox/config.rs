@@ -75,7 +75,7 @@ pub fn generate_config(
                 "type": "tun",
                 "tag": "tun-in",
                 "interface_name": settings.tun_interface.clone(),
-                "address": ["172.19.0.1/30"],
+                "address": ["10.222.0.1/30"],
                 "mtu": 1420,
                 "auto_route": true,
                 "strict_route": true,
@@ -244,7 +244,7 @@ fn build_route(
             "action": "hijack-dns"
         }),
         json!({
-            "ip_cidr": ["172.19.0.0/30"],
+            "ip_cidr": ["10.222.0.0/30"],
             "outbound": "direct"
         }),
     ];
