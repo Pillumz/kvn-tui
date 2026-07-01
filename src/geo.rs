@@ -181,7 +181,7 @@ impl GeoManager {
         let meta = self.load_metadata().ok()?;
         meta.updated_at
             .get(&region)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .map(|dt| dt.format("%d %b %H:%M").to_string())
     }
 
     /// Check whether rule-sets have updates available for the given region.
@@ -574,8 +574,8 @@ mod tests {
         };
         gm.save_metadata(&meta).unwrap();
         let formatted = gm.last_updated(GeoRegion::Ru).unwrap();
-        assert_eq!(formatted.len(), 16);
-        assert_eq!(formatted, dt.format("%Y-%m-%d %H:%M").to_string());
+        assert_eq!(formatted.len(), 12);
+        assert_eq!(formatted, dt.format("%d %b %H:%M").to_string());
         assert!(gm.last_updated(GeoRegion::Cn).is_none());
     }
 
