@@ -46,6 +46,24 @@ impl GeoAvailability {
     }
 }
 
+/// Generate a minimal sing-box config for latency testing: one SOCKS5 inbound
+/// on `socks_port` (localhost only), the profile's outbound, and a route that
+/// sends all traffic to that outbound.
+pub fn generate_test_config(profile: &Profile, socks_port: u16) -> anyhow::Result<Value> {
+    let outbounds = build_outbound(profile)?;
+    Ok(json!({
+        "log": { "level": "warn" },
+        "inbounds": [{
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "listen_port": socks_port
+        }],
+        "outbounds": outbounds,
+        "route": { "final": "proxy", "default_mark": 666, "auto_detect_interface": true }
+    }))
+}
+
 /// Generate a complete sing-box JSON configuration from a profile.
 /// Uses the modern sing-box 1.12+ format.
 pub fn generate_config(
@@ -1381,5 +1399,57 @@ mod tests {
         };
         let v = build_dns_rule(&rule);
         assert_eq!(v["disable_cache"], true);
+    }
+
+    #[test]
+    fn generate_test_config_has_socks_inbound_on_given_port() {
+        let profile = test_profile();
+        let cfg = generate_test_config(&profile, 12345).unwrap();
+        let inbounds = cfg["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 1);
+        assert_eq!(inbounds[0]["type"], "socks");
+        assert_eq!(inbounds[0]["listen"], "127.0.0.1");
+        assert_eq!(inbounds[0]["listen_port"], 12345);
+    }
+
+    #[test]
+    fn generate_test_config_log_level_is_warn() {
+        let profile = test_profile();
+        let cfg = generate_test_config(&profile, 9999).unwrap();
+        assert_eq!(cfg["log"]["level"], "warn");
+    }
+
+    #[test]
+    fn generate_test_config_includes_profile_outbound() {
+        let profile = test_profile();
+        let cfg = generate_test_config(&profile, 9999).unwrap();
+        let outbounds = cfg["outbounds"].as_array().unwrap();
+        assert!(!outbounds.is_empty());
+        // The primary outbound should have tag "proxy" (VLESS convention).
+        assert!(outbounds.iter().any(|o| o["tag"] == "proxy"));
+    }
+
+    #[test]
+    fn generate_test_config_has_route_to_proxy_and_no_dns() {
+        let profile = test_profile();
+        let cfg = generate_test_config(&profile, 9999).unwrap();
+        assert_eq!(
+            cfg["route"]["final"], "proxy",
+            "route must send traffic to proxy outbound"
+        );
+        assert_eq!(
+            cfg["route"]["default_mark"].as_u64(),
+            Some(666),
+            "default_mark must match killswitch nft rule (0x29a)"
+        );
+        assert_eq!(
+            cfg["route"]["auto_detect_interface"].as_bool(),
+            Some(true),
+            "auto_detect_interface needed to bypass TUN via SO_BINDTODEVICE"
+        );
+        assert!(
+            cfg.get("dns").is_none(),
+            "no dns section needed in test config"
+        );
     }
 }

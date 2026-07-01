@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -181,6 +181,13 @@ pub struct Model {
     /// Live-preview theme slug while the theme picker is open. `None`
     /// outside the overlay; cleared on Enter/Esc.
     pub theme_draft: Option<String>,
+    /// Latency results from profile tests. `Some(ms)` = success, `None` = error.
+    /// Absent key = not yet tested. Transient — never persisted to disk.
+    pub profile_latencies: HashMap<Uuid, Option<u64>>,
+    /// Profile UUIDs whose latency test is currently running (shows spinner).
+    pub testing_profiles: HashSet<Uuid>,
+    /// Queue of profile UUIDs waiting to be tested (batch dispatch).
+    pub pending_tests: VecDeque<Uuid>,
 }
 
 impl Model {
@@ -275,6 +282,9 @@ impl Model {
             theme: Theme::legacy(),
             theme_selected: 0,
             theme_draft: None,
+            profile_latencies: HashMap::new(),
+            testing_profiles: HashSet::new(),
+            pending_tests: VecDeque::new(),
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -326,6 +336,9 @@ impl Model {
             theme: Theme::legacy(),
             theme_selected: 0,
             theme_draft: None,
+            profile_latencies: HashMap::new(),
+            testing_profiles: HashSet::new(),
+            pending_tests: VecDeque::new(),
         };
         if model.config.settings.geo_routing.current_region.is_none() {
             model.overlay = Overlay::GeoRegions;
@@ -516,6 +529,9 @@ impl Model {
             theme: Theme::legacy(),
             theme_selected: 0,
             theme_draft: None,
+            profile_latencies: HashMap::new(),
+            testing_profiles: HashSet::new(),
+            pending_tests: VecDeque::new(),
         }
     }
 }

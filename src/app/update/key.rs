@@ -184,6 +184,21 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.dns_strategy_draft = None;
         }
         KeyCode::Char('t') => {
+            if let Some(p) = model.selected_profile() {
+                let id = p.id;
+                if !model.testing_profiles.contains(&id) && !model.pending_tests.contains(&id) {
+                    model.pending_tests.push_back(id);
+                }
+            }
+        }
+        KeyCode::Char('T') => {
+            for p in &model.config.profiles {
+                if !model.testing_profiles.contains(&p.id) && !model.pending_tests.contains(&p.id) {
+                    model.pending_tests.push_back(p.id);
+                }
+            }
+        }
+        KeyCode::Char('C') => {
             let slugs = theme_picker_slugs();
             model.theme_selected = slugs
                 .iter()

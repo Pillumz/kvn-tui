@@ -1,7 +1,9 @@
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -237,7 +239,7 @@ fn execute_daemon_effect(
                 let result = crate::config::load_config()
                     .and_then(|c| c.validate().map(|_| c))
                     .map_err(crate::app::msg::IpcError::from);
-                let _ = tx.send(Msg::ConfigReloaded(result));
+                let _ = tx.send(Msg::ConfigReloaded(Box::new(result)));
             });
         }
         Effect::ApplyKillSwitch { enabled } => {
@@ -271,8 +273,144 @@ fn execute_daemon_effect(
                 },
             );
         }
+        Effect::TestProfile { id } => {
+            let profile = model.config.profiles.iter().find(|p| p.id == id).cloned();
+            let tx = tx.clone();
+            thread::spawn(move || {
+                let latency_ms = profile.and_then(|p| match run_test(&p, id) {
+                    Ok(ms) => Some(ms),
+                    Err(e) => {
+                        tracing::warn!("profile test failed: {e:#}");
+                        None
+                    }
+                });
+                let _ = tx.send(Msg::TestResult { id, latency_ms });
+            });
+        }
     }
     Ok(())
+}
+
+/// Test a profile's reachability using a temporary sing-box instance.
+///
+/// Allocates a free loopback port, writes a minimal SOCKS5-inbound config,
+/// spawns sing-box, waits for the port to open, then performs a SOCKS5
+/// CONNECT to `connectivitycheck.gstatic.com:80` through the proxy and
+/// returns the round-trip latency in milliseconds.
+fn run_test(profile: &crate::config::profile::Profile, id: uuid::Uuid) -> anyhow::Result<u64> {
+    use std::process::{Command, Stdio};
+
+    // Find a free loopback port by binding to :0, recording the OS-assigned
+    // port, then dropping the listener so sing-box can bind to it.
+    let socks_port = {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.local_addr()?.port()
+    };
+
+    let config = crate::singbox::config::generate_test_config(profile, socks_port)?;
+    let config_path = crate::paths::temp_test_config_path(&id);
+    std::fs::write(&config_path, serde_json::to_string(&config)?)?;
+
+    let singbox_bin = std::env::var("SING_BOX_PATH").unwrap_or_else(|_| "sing-box".to_string());
+    let mut child = Command::new(&singbox_bin)
+        .args(["run", "-c", config_path.to_string_lossy().as_ref()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn {singbox_bin}"))?;
+
+    let cleanup = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&config_path);
+    };
+
+    // Wait up to 3 s for sing-box to open the SOCKS5 port.
+    let addr = format!("127.0.0.1:{socks_port}");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let ready = loop {
+        if Instant::now() >= deadline {
+            break false;
+        }
+        if TcpStream::connect(&addr).is_ok() {
+            break true;
+        }
+        thread::sleep(Duration::from_millis(80));
+    };
+
+    if !ready {
+        cleanup(&mut child);
+        anyhow::bail!("sing-box did not open SOCKS5 port within 3 s");
+    }
+
+    // Perform SOCKS5 CONNECT to a well-known host and measure latency.
+    let result = socks5_connect_latency(&addr);
+    cleanup(&mut child);
+    result
+}
+
+/// Tunnel through the SOCKS5 proxy at `addr` to `connectivitycheck.gstatic.com:80`,
+/// send a minimal HTTP GET, and return the time from request-send to first
+/// response byte in milliseconds.
+///
+/// sing-box replies to SOCKS5 CONNECT before the outbound tunnel is open, so
+/// measuring CONNECT RTT gives ~0 ms. The HTTP round-trip through the actual
+/// VPN tunnel is the meaningful latency number.
+fn socks5_connect_latency(addr: &str) -> anyhow::Result<u64> {
+    const HOST: &[u8] = b"connectivitycheck.gstatic.com";
+    const HOST_STR: &str = "connectivitycheck.gstatic.com";
+    const PORT: u16 = 80;
+
+    let mut stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    // SOCKS5 greeting: no-auth method selection.
+    stream.write_all(&[0x05, 0x01, 0x00])?;
+    let mut resp = [0u8; 2];
+    stream.read_exact(&mut resp)?;
+    anyhow::ensure!(resp == [0x05, 0x00], "SOCKS5 auth negotiation failed");
+
+    // SOCKS5 CONNECT to target host (domain ATYP 0x03).
+    let mut req = vec![0x05, 0x01, 0x00, 0x03, HOST.len() as u8];
+    req.extend_from_slice(HOST);
+    req.push((PORT >> 8) as u8);
+    req.push((PORT & 0xff) as u8);
+    stream.write_all(&req)?;
+
+    // Read and discard CONNECT reply — sing-box answers before the tunnel is
+    // actually open, so this RTT is not meaningful.
+    let mut hdr = [0u8; 4];
+    stream.read_exact(&mut hdr)?;
+    anyhow::ensure!(hdr[0] == 0x05 && hdr[1] == 0x00, "SOCKS5 CONNECT rejected");
+    match hdr[3] {
+        0x01 => {
+            let mut b = [0u8; 6];
+            stream.read_exact(&mut b)?;
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            stream.read_exact(&mut len)?;
+            let mut b = vec![0u8; len[0] as usize + 2];
+            stream.read_exact(&mut b)?;
+        }
+        0x04 => {
+            let mut b = [0u8; 18];
+            stream.read_exact(&mut b)?;
+        }
+        _ => anyhow::bail!("unknown SOCKS5 address type"),
+    }
+
+    // Now the tunnel is open. Send an HTTP GET and time the first response byte
+    // — this is the real VPN round-trip latency.
+    let http_req =
+        format!("GET /generate_204 HTTP/1.1\r\nHost: {HOST_STR}\r\nConnection: close\r\n\r\n");
+    let start = Instant::now();
+    stream.write_all(http_req.as_bytes())?;
+    let mut buf = [0u8; 16];
+    stream.read_exact(&mut buf)?;
+    Ok(start.elapsed().as_millis() as u64)
 }
 
 /// Wall-clock time in milliseconds since the Unix epoch.
@@ -401,6 +539,16 @@ fn build_snapshot(model: &Model) -> StateSnapshot {
         subscriptions: model.config.subscriptions.clone(),
         settings: model.config.settings.clone(),
         traffic: model.traffic.clone(),
+        profile_latencies: model
+            .profile_latencies
+            .iter()
+            .map(|(id, ms)| (id.to_string(), *ms))
+            .collect(),
+        testing_profiles: model
+            .testing_profiles
+            .iter()
+            .map(|id| id.to_string())
+            .collect(),
     }
 }
 

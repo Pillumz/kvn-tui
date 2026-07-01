@@ -39,6 +39,17 @@ pub fn temp_singbox_config_path() -> PathBuf {
     }
 }
 
+/// Return the path to a temporary sing-box config used for profile latency
+/// tests. Each test gets its own file keyed by profile UUID so concurrent
+/// tests don't collide.
+pub fn temp_test_config_path(id: &uuid::Uuid) -> PathBuf {
+    if let Some(dir) = dirs::runtime_dir() {
+        dir.join(format!("kvn-test-{id}.json"))
+    } else {
+        PathBuf::from(format!("/tmp/kvn-test-{id}.json"))
+    }
+}
+
 /// Return the directory for geo rule-set databases.
 pub fn geo_dir() -> PathBuf {
     config_dir()

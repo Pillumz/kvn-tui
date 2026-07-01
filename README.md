@@ -39,7 +39,7 @@
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — split-pane view interleaves sing-box output with app events; both streams are also persisted to `sing-box.log` and `app.log` on disk
 - **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
-- **Themable** — 19 bundled [Omarchy](https://omarchy.org/) palettes (gruvbox, tokyo-night, catppuccin, nord, kanagawa, rose-pine, …) compiled into the binary; pick interactively via `t` and persist the choice in `profiles.json`. On Omarchy systems the `omarchy` slug auto-follows `~/.config/omarchy/current/theme.name` and updates live on `omarchy theme set …`. OSC 11 also repaints the terminal's own padding so the whole window matches the theme
+- **Themable** — 19 bundled [Omarchy](https://omarchy.org/) palettes (gruvbox, tokyo-night, catppuccin, nord, kanagawa, rose-pine, …) compiled into the binary; pick interactively via `C` and persist the choice in `profiles.json`. On Omarchy systems the `omarchy` slug auto-follows `~/.config/omarchy/current/theme.name` and updates live on `omarchy theme set …`
 
 ---
 
@@ -270,8 +270,10 @@ Press `?` at any time to see the full key map.
 | `o` | Select geo region |
 | `K` | Toggle kill switch |
 | `D` | DNS settings (presets, strategy, fake-IP) |
-| `t` | Theme picker (live preview, Enter to persist) |
+| `C` | Theme picker (live preview, Enter to persist) |
 | `a` | Toggle auto-connect |
+| `t` | Test latency of selected profile |
+| `T` | Test latency of all profiles (up to 4 in parallel) |
 
 **Application**
 

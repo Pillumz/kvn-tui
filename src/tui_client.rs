@@ -204,7 +204,7 @@ fn run_loop(
                 }
             }
             Msg::StateUpdate(snapshot) => {
-                apply_snapshot(model, snapshot);
+                apply_snapshot(model, *snapshot);
                 needs_redraw = true;
             }
             Msg::Tick => {
@@ -261,6 +261,17 @@ fn apply_snapshot(model: &mut Model, snapshot: crate::app::msg::StateSnapshot) {
     model.config.subscriptions = snapshot.subscriptions;
     model.config.settings = snapshot.settings;
     model.traffic = snapshot.traffic;
+    model.profile_latencies = snapshot
+        .profile_latencies
+        .into_iter()
+        .filter_map(|(s, ms)| uuid::Uuid::parse_str(&s).ok().map(|id| (id, ms)))
+        .collect();
+
+    model.testing_profiles = snapshot
+        .testing_profiles
+        .into_iter()
+        .filter_map(|s| uuid::Uuid::parse_str(&s).ok())
+        .collect();
     // Resolve the effective theme: live-preview draft wins while the
     // picker is open, otherwise honor the committed `Settings.theme`.
     let effective_slug = model

@@ -161,7 +161,9 @@ fn draw_help(frame: &mut Frame, theme: &Theme, area: Rect) {
         Row::new(vec!["a", "Toggle auto-connect"]),
         Row::new(vec!["K", "Toggle kill switch"]),
         Row::new(vec!["D", "DNS settings"]),
-        Row::new(vec!["t", "Theme picker"]),
+        Row::new(vec!["C", "Theme picker"]),
+        Row::new(vec!["t", "Test selected profile latency"]),
+        Row::new(vec!["T", "Test all profiles (batch)"]),
         Row::new(vec!["r", "Reconnect"]),
         Row::new(vec!["s", "Stop / disconnect"]),
         Row::new(vec!["q / Esc", "Detach TUI"]),
@@ -463,7 +465,10 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
     } else {
         // Global address-column width: max across all visible profiles so every
         // row shares the same column layout and aligns vertically.
-        let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
+        let show_latency =
+            !model.profile_latencies.is_empty() || !model.testing_profiles.is_empty();
+        let overhead = FIXED_OVERHEAD_BASE + if show_latency { LATENCY_WIDTH } else { 0 };
+        let remaining = inner_width.saturating_sub(overhead);
         let addr_width = model
             .config
             .profiles
@@ -507,6 +512,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                     pos == last,
                     inner_width,
                     addr_width,
+                    show_latency,
                 ));
             }
             lines.push(Line::from(""));
@@ -544,6 +550,7 @@ fn draw_sources(frame: &mut Frame, model: &Model, area: Rect) {
                     pos == last,
                     inner_width,
                     addr_width,
+                    show_latency,
                 ));
             }
             lines.push(Line::from(""));
@@ -616,8 +623,10 @@ const MIN_ADDR_WIDTH: usize = 11;
 /// Caps the address column so the name is never squeezed below MIN_NAME_WIDTH
 /// even when a profile has a very long hostname.
 const MAX_ADDR_WIDTH: usize = 21;
-/// Fixed overhead: prefix + protocol + two spaces between columns.
-const FIXED_OVERHEAD: usize = PREFIX_WIDTH + PROTOCOL_WIDTH + 2;
+/// Width of the latency column including its leading space: " 9999ms" = 7 chars.
+const LATENCY_WIDTH: usize = 7;
+/// Fixed overhead without latency column: prefix + protocol + two spaces between columns.
+const FIXED_OVERHEAD_BASE: usize = PREFIX_WIDTH + PROTOCOL_WIDTH + 2;
 
 /// Build one profile row for the Sources list.
 /// `addr_width` is pre-computed globally so all rows share the same column layout.
@@ -628,6 +637,7 @@ fn profile_line(
     is_last: bool,
     inner_width: usize,
     addr_width: usize,
+    show_latency: bool,
 ) -> Line<'static> {
     use ratatui::text::Span;
 
@@ -640,7 +650,8 @@ fn profile_line(
     let prefix = if is_last { "└ " } else { "├ " };
 
     let addr_port = format!("{}:{}", profile.address, profile.port);
-    let remaining = inner_width.saturating_sub(FIXED_OVERHEAD);
+    let latency_w = if show_latency { LATENCY_WIDTH } else { 0 };
+    let remaining = inner_width.saturating_sub(FIXED_OVERHEAD_BASE + latency_w);
     let name_width = remaining.saturating_sub(addr_width).max(MIN_NAME_WIDTH);
 
     let name_col = fit_to_visual_width(&profile.name, name_width);
@@ -657,13 +668,19 @@ fn profile_line(
         theme.normal()
     };
 
-    let addr_col_padded = if is_selected {
+    let addr_col_padded = if is_selected || show_latency {
         pad_to_visual_width(&addr_col, addr_width)
     } else {
         addr_col
     };
 
-    let used = PREFIX_WIDTH + name_width + 1 + PROTOCOL_WIDTH + 1 + visual_width(&addr_col_padded);
+    let used = PREFIX_WIDTH
+        + name_width
+        + 1
+        + PROTOCOL_WIDTH
+        + 1
+        + visual_width(&addr_col_padded)
+        + latency_w;
     let trailing = inner_width.saturating_sub(used);
 
     let mut spans = vec![
@@ -674,6 +691,18 @@ fn profile_line(
         Span::styled(" ", style),
         Span::styled(addr_col_padded, style),
     ];
+    if show_latency {
+        let latency_text = if model.testing_profiles.contains(&profile.id) {
+            format!(" {:<6}", "…")
+        } else {
+            match model.profile_latencies.get(&profile.id) {
+                Some(&Some(ms)) => format!(" {:<6}", format!("{}ms", ms.min(9999))),
+                Some(None) => format!(" {:<6}", "err"),
+                None => " ".repeat(LATENCY_WIDTH),
+            }
+        };
+        spans.push(Span::styled(latency_text, style));
+    }
     if is_selected && trailing > 0 {
         spans.push(Span::styled(" ".repeat(trailing), style));
     }
@@ -855,6 +884,9 @@ mod tests {
             ("u", "Update subscription or geo"),
             ("i", "Cycle subscription auto-update"),
             ("e", "Open profiles.json in $EDITOR"),
+            ("C", "Theme picker"),
+            ("t", "Test selected profile latency"),
+            ("T", "Test all profiles (batch)"),
             ("r", "Reconnect"),
             ("s", "Stop / disconnect"),
             ("q / Esc", "Detach TUI"),

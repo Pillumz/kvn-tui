@@ -187,7 +187,7 @@ impl IpcClient {
                 match line {
                     Ok(line) => {
                         if let Ok(snapshot) = serde_json::from_str::<StateSnapshot>(&line) {
-                            let _ = tx.send(Msg::StateUpdate(snapshot));
+                            let _ = tx.send(Msg::StateUpdate(Box::new(snapshot)));
                         }
                     }
                     Err(_) => break,
@@ -239,6 +239,8 @@ mod tests {
             subscriptions: vec![],
             settings: Settings::default(),
             traffic: TrafficStats::default(),
+            profile_latencies: Default::default(),
+            testing_profiles: Default::default(),
         }
     }
 

@@ -60,8 +60,8 @@ pub enum Msg {
     },
 
     IpcCommand(IpcCommand),
-    StateUpdate(StateSnapshot),
-    ConfigReloaded(Result<crate::config::profile::Config, IpcError>),
+    StateUpdate(Box<StateSnapshot>),
+    ConfigReloaded(Box<Result<crate::config::profile::Config, IpcError>>),
     KillSwitchApplied {
         enabled: bool,
         error: Option<IpcError>,
@@ -79,6 +79,13 @@ pub enum Msg {
     /// override). Carries a fully constructed [`Theme`] so the pure reducer
     /// can swap it in without performing any I/O.
     ThemeChanged(Theme),
+    /// Result of a profile latency test initiated via `Effect::TestProfile`.
+    /// `latency_ms` is `None` when the test timed out or the endpoint was
+    /// unreachable.
+    TestResult {
+        id: Uuid,
+        latency_ms: Option<u64>,
+    },
 }
 
 #[derive(Debug)]
@@ -211,4 +218,11 @@ pub struct StateSnapshot {
     pub settings: Settings,
     #[serde(default)]
     pub traffic: TrafficStats,
+    /// Latency results keyed by profile UUID string. `null` = error, number =
+    /// ms. Absent key = not yet tested. Transient — not persisted to disk.
+    #[serde(default)]
+    pub profile_latencies: std::collections::HashMap<String, Option<u64>>,
+    /// Profile UUIDs whose test is currently in-flight (spinner indicator).
+    #[serde(default)]
+    pub testing_profiles: Vec<String>,
 }

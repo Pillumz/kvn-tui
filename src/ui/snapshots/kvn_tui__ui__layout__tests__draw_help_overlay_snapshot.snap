@@ -8,7 +8,6 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
-│                                      ││                                      │
 │               ┌ Help ────────────────────────────────────────┐               │
 │               │Key          Action                           │               │
 │               │j / Down     Move down                        │               │
@@ -27,7 +26,9 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │a            Toggle auto-connect              │               │
 │               │K            Toggle kill switch               │               │
 │               │D            DNS settings                     │               │
-│               │t            Theme picker                     │               │
+│               │C            Theme picker                     │               │
+│               │t            Test selected profile latency    │               │
+│               │T            Test all profiles (batch)        │               │
 │               │r            Reconnect                        │               │
 │               │s            Stop / disconnect                │               │
 │               │q / Esc      Detach TUI                       │               │
@@ -35,7 +36,6 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │?            Show this help                   │               │
 │               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
-│                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │
 │                                      ││                                      │

@@ -35,4 +35,9 @@ pub enum Effect {
         prev_down_total: u64,
         prev_sampled_at_ms: u64,
     },
+    /// Test a profile's reachability and measure latency via a temporary
+    /// sing-box SOCKS5 inbound. Result is sent back as `Msg::TestResult`.
+    TestProfile {
+        id: Uuid,
+    },
 }

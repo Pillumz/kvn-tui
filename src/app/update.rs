@@ -105,7 +105,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         }
         Msg::IpcCommand(cmd) => handle_ipc_command(model, cmd),
         Msg::StateUpdate(_) => vec![],
-        Msg::ConfigReloaded(result) => handle_config_reloaded(model, result),
+        Msg::ConfigReloaded(result) => handle_config_reloaded(model, *result),
         Msg::KillSwitchApplied { enabled, error } => {
             handle_kill_switch_applied(model, enabled, error)
         }
@@ -124,6 +124,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
             model.theme = theme;
             model.needs_redraw = true;
             vec![]
+        }
+        Msg::TestResult { id, latency_ms } => {
+            model.testing_profiles.remove(&id);
+            model.profile_latencies.insert(id, latency_ms);
+            vec![Effect::BroadcastState]
         }
     }
 }
@@ -276,6 +281,15 @@ fn handle_tick(model: &mut Model) -> Vec<Effect> {
 
     // Auto-update subscriptions that are due.
     effects.extend(check_due_subscriptions(model));
+
+    // Dispatch pending profile tests, max 4 concurrent.
+    while model.testing_profiles.len() < 4 {
+        let Some(id) = model.pending_tests.pop_front() else {
+            break;
+        };
+        model.testing_profiles.insert(id);
+        effects.push(Effect::TestProfile { id });
+    }
 
     // Throttled Clash-API poll for live traffic stats.
     if model.connection == ConnectionState::Connected {
@@ -770,7 +784,7 @@ mod tests {
         )]);
         model.config.settings.geo_routing.set_region(GeoRegion::Ru);
         let config = model.config.clone();
-        let effects = update(&mut model, Msg::ConfigReloaded(Ok(config)));
+        let effects = update(&mut model, Msg::ConfigReloaded(Box::new(Ok(config))));
         assert_eq!(
             effects,
             vec![Effect::BroadcastState, app_log_info("Profiles reloaded")]
@@ -782,7 +796,7 @@ mod tests {
         let mut model = model_with_profiles(vec![]);
         let effects = update(
             &mut model,
-            Msg::ConfigReloaded(Err(crate::app::msg::IpcError::new("parse error"))),
+            Msg::ConfigReloaded(Box::new(Err(crate::app::msg::IpcError::new("parse error")))),
         );
         assert_eq!(
             effects,
@@ -2225,7 +2239,7 @@ mod tests {
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let mut model = model_with_profiles(vec![]);
         model.config.settings.theme = "gruvbox".into();
-        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        let key = KeyEvent::new(KeyCode::Char('C'), crossterm::event::KeyModifiers::NONE);
         let _ = update(&mut model, Msg::Key(key));
         assert_eq!(model.overlay, Overlay::ThemeSettings);
         let slugs = crate::app::update::theme_picker_slugs();
@@ -2248,7 +2262,7 @@ mod tests {
         let _ = update(
             &mut model,
             Msg::Key(KeyEvent::new(
-                KeyCode::Char('t'),
+                KeyCode::Char('C'),
                 crossterm::event::KeyModifiers::NONE,
             )),
         );
@@ -2280,7 +2294,7 @@ mod tests {
         let _ = update(
             &mut model,
             Msg::Key(KeyEvent::new(
-                KeyCode::Char('t'),
+                KeyCode::Char('C'),
                 crossterm::event::KeyModifiers::NONE,
             )),
         );
@@ -2319,7 +2333,7 @@ mod tests {
         let _ = update(
             &mut model,
             Msg::Key(KeyEvent::new(
-                KeyCode::Char('t'),
+                KeyCode::Char('C'),
                 crossterm::event::KeyModifiers::NONE,
             )),
         );
@@ -2377,5 +2391,142 @@ mod tests {
         let slugs = crate::app::update::theme_picker_slugs();
         assert!(!slugs.iter().any(|s| s == "omarchy"));
         assert_eq!(slugs.len(), 19);
+    }
+
+    // ── Profile testing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn t_key_with_no_profile_does_nothing() {
+        let mut model = model_with_profiles(vec![]);
+        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        assert!(model.pending_tests.is_empty());
+        assert!(model.testing_profiles.is_empty());
+    }
+
+    #[test]
+    fn t_key_adds_selected_profile_to_pending() {
+        let profiles = sample_profiles();
+        let id = profiles[0].id;
+        let mut model = model_with_profiles(profiles);
+        model.selected = 0;
+        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(model.pending_tests.len(), 1);
+        assert_eq!(model.pending_tests[0], id);
+    }
+
+    #[test]
+    fn t_key_does_not_duplicate_already_queued_profile() {
+        let profiles = sample_profiles();
+        let id = profiles[0].id;
+        let mut model = model_with_profiles(profiles);
+        model.selected = 0;
+        let key = KeyEvent::new(KeyCode::Char('t'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(model.pending_tests.len(), 1, "no duplicate enqueue");
+        assert_eq!(model.pending_tests[0], id);
+    }
+
+    #[test]
+    fn shift_t_adds_all_profiles_to_pending() {
+        let profiles = sample_profiles();
+        let count = profiles.len();
+        let mut model = model_with_profiles(profiles);
+        let key = KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(model.pending_tests.len(), count);
+    }
+
+    #[test]
+    fn shift_t_does_not_duplicate_already_queued_profiles() {
+        let profiles = sample_profiles();
+        let count = profiles.len();
+        let mut model = model_with_profiles(profiles);
+        let key = KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(
+            model.pending_tests.len(),
+            count,
+            "second T adds no duplicates"
+        );
+    }
+
+    #[test]
+    fn tick_dispatches_up_to_4_tests_from_pending() {
+        let profiles = sample_profiles();
+        // Need 5 profiles — add two more manually.
+        let mut profiles5 = profiles;
+        let extra_a = crate::config::profile::Profile::new_vless(
+            "D".into(),
+            "d.example.com".into(),
+            443,
+            "00000000-0000-0000-0000-000000000004".into(),
+        );
+        let extra_b = crate::config::profile::Profile::new_vless(
+            "E".into(),
+            "e.example.com".into(),
+            443,
+            "00000000-0000-0000-0000-000000000005".into(),
+        );
+        profiles5.push(extra_a);
+        profiles5.push(extra_b);
+        let mut model = model_with_profiles(profiles5);
+        // Enqueue all 5.
+        let key = KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::NONE);
+        let _ = update(&mut model, Msg::Key(key));
+        assert_eq!(model.pending_tests.len(), 5);
+        // Tick should dispatch first 4.
+        let effects = update(&mut model, Msg::Tick);
+        let test_effects: Vec<_> = effects
+            .iter()
+            .filter(|e| matches!(e, Effect::TestProfile { .. }))
+            .collect();
+        assert_eq!(test_effects.len(), 4);
+        assert_eq!(model.testing_profiles.len(), 4);
+        assert_eq!(model.pending_tests.len(), 1, "one still waiting");
+    }
+
+    #[test]
+    fn test_result_ok_stores_latency_and_clears_testing() {
+        let profiles = sample_profiles();
+        let id = profiles[0].id;
+        let mut model = model_with_profiles(profiles);
+        model.testing_profiles.insert(id);
+        let effects = update(
+            &mut model,
+            Msg::TestResult {
+                id,
+                latency_ms: Some(42),
+            },
+        );
+        assert!(!model.testing_profiles.contains(&id));
+        assert_eq!(model.profile_latencies.get(&id), Some(&Some(42)));
+        assert!(effects.iter().any(|e| matches!(e, Effect::BroadcastState)));
+    }
+
+    #[test]
+    fn test_result_err_stores_none_and_clears_testing() {
+        let profiles = sample_profiles();
+        let id = profiles[0].id;
+        let mut model = model_with_profiles(profiles);
+        model.profile_latencies.insert(id, Some(100));
+        model.testing_profiles.insert(id);
+        let effects = update(
+            &mut model,
+            Msg::TestResult {
+                id,
+                latency_ms: None,
+            },
+        );
+        assert!(!model.testing_profiles.contains(&id));
+        assert_eq!(
+            model.profile_latencies.get(&id),
+            Some(&None),
+            "failure stores None (shown as err in UI)"
+        );
+        assert!(effects.iter().any(|e| matches!(e, Effect::BroadcastState)));
     }
 }
