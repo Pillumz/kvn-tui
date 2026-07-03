@@ -19,7 +19,9 @@ pub fn load_config_at(path: &Path) -> Result<Config> {
 
     let mut config: Config =
         serde_json::from_str(&contents).with_context(|| format!("Failed to parse {:?}", path))?;
-    config.migrate();
+    config
+        .migrate()
+        .with_context(|| format!("Failed to migrate {:?}", path))?;
 
     Ok(config)
 }
