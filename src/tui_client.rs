@@ -200,12 +200,17 @@ fn run_loop(
                             Err(e) => {
                                 // ConfigBackup restored the original file, so
                                 // profiles.json is intact — but the user's
-                                // edits are gone. Surface why so they can
-                                // retry instead of wondering what happened.
-                                model.set_status(crate::app::model::AppStatus::Error(format!(
-                                    "Edit rejected: {e:#}"
-                                )));
-                                model.overlay = crate::app::model::Overlay::Error;
+                                // edits are gone. Send the message to the
+                                // daemon so it lands in *its* model: setting
+                                // status/overlay locally is pointless because
+                                // apply_snapshot overwrites them on the next
+                                // broadcast. Also push into the client-side
+                                // log panel (apply_snapshot does not touch
+                                // `logs`) so the message survives dismissal
+                                // of the error overlay.
+                                let message = format!("Edit rejected: {e:#}");
+                                model.push_log(message.clone());
+                                client.send(&IpcCommand::ClientError { message })?;
                             }
                         }
                         needs_redraw = true;

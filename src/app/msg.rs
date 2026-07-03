@@ -118,6 +118,12 @@ pub enum IpcCommand {
     },
     ReloadConfig,
     Quit,
+    /// Client-side failure the daemon owns none of — e.g. the external editor
+    /// path rejecting an edit. The daemon writes it into its model's status
+    /// and overlay so the next broadcast surfaces it in the TUI.
+    ClientError {
+        message: String,
+    },
 }
 
 #[cfg(test)]

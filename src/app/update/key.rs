@@ -375,6 +375,11 @@ pub(super) fn handle_ipc_command(
             vec![Effect::ReloadConfig]
         }
         IpcCommand::Quit => vec![Effect::Quit],
+        IpcCommand::ClientError { message } => {
+            model.set_status(crate::app::model::AppStatus::Error(message));
+            model.overlay = crate::app::model::Overlay::Error;
+            vec![]
+        }
     };
     effects.push(Effect::BroadcastState);
     effects

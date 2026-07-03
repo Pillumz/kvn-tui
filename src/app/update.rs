@@ -768,6 +768,24 @@ mod tests {
     }
 
     #[test]
+    fn ipc_command_client_error_sets_status_and_overlay() {
+        let mut model = model_with_profiles(vec![]);
+        let effects = handle_ipc_command(
+            &mut model,
+            crate::app::msg::IpcCommand::ClientError {
+                message: "Edit rejected: bad UUID".into(),
+            },
+        );
+        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert!(model.status.is_error(), "status: {:?}", model.status);
+        assert_eq!(model.status.text(), "Edit rejected: bad UUID");
+        assert_eq!(model.overlay, crate::app::model::Overlay::Error);
+        // set_status also pushes into the log panel so the message survives
+        // dismissal of the overlay.
+        assert!(model.logs.iter().any(|l| l.contains("Edit rejected")));
+    }
+
+    #[test]
     fn ipc_command_reload_config_returns_effect() {
         let mut model = model_with_profiles(vec![]);
         let effects = handle_ipc_command(&mut model, crate::app::msg::IpcCommand::ReloadConfig);
