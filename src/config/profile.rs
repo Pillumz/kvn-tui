@@ -265,6 +265,7 @@ impl TlsCommon {
 
 /// Transport layer configuration (ws / grpc / http / httpupgrade).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TransportConfig {
     #[serde(rename = "type")]
     pub kind: TransportType,
@@ -504,6 +505,7 @@ pub struct TrojanConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ShadowsocksConfig {
     pub method: ShadowsocksCipher,
     pub password: String,
@@ -569,6 +571,7 @@ pub struct AnytlsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SocksConfig {
     #[serde(default)]
     pub version: SocksVersion,
@@ -589,6 +592,7 @@ pub struct HttpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SshConfig {
     pub user: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -610,6 +614,13 @@ pub struct SshConfig {
 /// The `protocol` discriminant is serialized at the same JSON level as the
 /// other [`Profile`] fields via `#[serde(flatten)]` (internally-tagged enum).
 /// For VLESS this preserves the historic `profiles.json` shape exactly.
+///
+/// Structs that carry `#[serde(flatten)] tls: TlsCommon` (Vless/Vmess/Trojan/
+/// Hysteria2/Tuic/Shadowtls/Anytls/Http) cannot use `#[serde(deny_unknown_fields)]`
+/// — serde silently disables the check whenever `flatten` is present, since it
+/// can no longer tell which fields "belong" to the parent versus the flattened
+/// child. Typos inside those variants therefore still deserialize as `None`.
+/// Structs without a flattened tls block do enforce `deny_unknown_fields`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "lowercase")]
 pub enum ProtocolConfig {
@@ -770,6 +781,48 @@ impl Profile {
     /// Short label for the UI protocol column (≤6 chars).
     pub fn protocol_label(&self) -> &'static str {
         self.protocol().ui_label()
+    }
+
+    /// Deeper semantic validation on top of the per-field non-empty checks
+    /// enforced by `Config::validate`. Verifies:
+    /// - `port != 0`
+    /// - `address` parses as an IPv4/IPv6 literal or a valid hostname
+    /// - protocol UUIDs (VLESS/VMess/TUIC) parse as [`Uuid`]
+    /// - `security=Reality` requires a populated `reality` block
+    pub fn validate_semantic(&self) -> anyhow::Result<()> {
+        if self.port == 0 {
+            anyhow::bail!("port must not be 0");
+        }
+        validate_host(&self.address)?;
+        match &self.config {
+            ProtocolConfig::Vless(cfg) => {
+                Uuid::parse_str(cfg.uuid.trim()).map_err(|e| {
+                    anyhow::anyhow!("vless.uuid {:?} is not a valid UUID: {e}", cfg.uuid)
+                })?;
+                if cfg.security == Some(Security::Reality) && cfg.tls.reality.is_none() {
+                    anyhow::bail!("vless.security=reality requires a `reality` block");
+                }
+            }
+            ProtocolConfig::Vmess(cfg) => {
+                Uuid::parse_str(cfg.uuid.trim()).map_err(|e| {
+                    anyhow::anyhow!("vmess.uuid {:?} is not a valid UUID: {e}", cfg.uuid)
+                })?;
+            }
+            ProtocolConfig::Tuic(cfg) => {
+                Uuid::parse_str(cfg.uuid.trim()).map_err(|e| {
+                    anyhow::anyhow!("tuic.uuid {:?} is not a valid UUID: {e}", cfg.uuid)
+                })?;
+            }
+            ProtocolConfig::Trojan(_)
+            | ProtocolConfig::Shadowsocks(_)
+            | ProtocolConfig::Hysteria2(_)
+            | ProtocolConfig::Shadowtls(_)
+            | ProtocolConfig::Anytls(_)
+            | ProtocolConfig::Socks(_)
+            | ProtocolConfig::Http(_)
+            | ProtocolConfig::Ssh(_) => {}
+        }
+        Ok(())
     }
 
     /// Stable key identifying the credentials behind this profile,
@@ -973,6 +1026,20 @@ pub struct Settings {
     pub log_level: String,
 }
 
+/// Accept `address` if it parses as a bare IPv4/IPv6 literal or as a hostname.
+/// sing-box wants the on-wire form (unbracketed for IPv6), so we try
+/// [`IpAddr`](std::net::IpAddr) first and fall back to [`url::Host::parse`]
+/// for domain names. Bracketed IPv6 (`[::1]`) is accepted via `Host::parse`.
+fn validate_host(address: &str) -> anyhow::Result<()> {
+    use std::net::IpAddr;
+    if address.parse::<IpAddr>().is_ok() {
+        return Ok(());
+    }
+    url::Host::parse(address)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("address {:?} is not a valid IP or hostname: {e}", address))
+}
+
 fn default_tun_interface() -> String {
     "tun0".to_string()
 }
@@ -1090,6 +1157,9 @@ impl Config {
                 anyhow::bail!("Profile {num}: address must not be empty");
             }
             if let Err(e) = profile.config.validate() {
+                anyhow::bail!("Profile {num}: {e}");
+            }
+            if let Err(e) = profile.validate_semantic() {
                 anyhow::bail!("Profile {num}: {e}");
             }
         }
@@ -1512,7 +1582,7 @@ mod tests {
             "Valid".to_string(),
             "1.2.3.4".to_string(),
             443,
-            "uuid".to_string(),
+            crate::test_helpers::TEST_UUID.to_string(),
         ));
         config.settings.default_profile = Some(config.profiles[0].id);
         assert!(config.validate().is_ok());
@@ -1588,6 +1658,135 @@ mod tests {
             "Error was: {}",
             err
         );
+    }
+
+    #[test]
+    fn validate_semantic_rejects_port_zero() {
+        let mut p = Profile::new_vless(
+            "P".to_string(),
+            "1.2.3.4".to_string(),
+            0,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        p.port = 0;
+        let err = p.validate_semantic().unwrap_err().to_string();
+        assert!(err.contains("port"), "Error was: {}", err);
+    }
+
+    #[test]
+    fn validate_semantic_rejects_garbage_uuid() {
+        let p = Profile::new_vless(
+            "P".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            "not-a-uuid".to_string(),
+        );
+        let err = p.validate_semantic().unwrap_err().to_string();
+        assert!(err.contains("vless.uuid"), "Error was: {}", err);
+    }
+
+    #[test]
+    fn validate_semantic_accepts_ipv6_literal() {
+        let p = Profile::new_vless(
+            "P".to_string(),
+            "2001:db8::1".to_string(),
+            443,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        p.validate_semantic().unwrap();
+    }
+
+    #[test]
+    fn validate_semantic_accepts_hostname() {
+        let p = Profile::new_vless(
+            "P".to_string(),
+            "vpn.example.com".to_string(),
+            443,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        p.validate_semantic().unwrap();
+    }
+
+    #[test]
+    fn validate_semantic_rejects_address_with_spaces() {
+        let p = Profile::new_vless(
+            "P".to_string(),
+            "bad host name".to_string(),
+            443,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        assert!(p.validate_semantic().is_err());
+    }
+
+    #[test]
+    fn validate_semantic_rejects_reality_without_block() {
+        let mut p = Profile::new_vless(
+            "P".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        if let ProtocolConfig::Vless(ref mut cfg) = p.config {
+            cfg.security = Some(Security::Reality);
+            cfg.tls.reality = None;
+        }
+        let err = p.validate_semantic().unwrap_err().to_string();
+        assert!(
+            err.contains("reality") && err.contains("block"),
+            "Error was: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_semantic_accepts_reality_with_block() {
+        let mut p = Profile::new_vless(
+            "P".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            crate::test_helpers::TEST_UUID.to_string(),
+        );
+        if let ProtocolConfig::Vless(ref mut cfg) = p.config {
+            cfg.security = Some(Security::Reality);
+            cfg.tls.reality = Some(RealitySettings::default());
+        }
+        p.validate_semantic().unwrap();
+    }
+
+    #[test]
+    fn save_config_at_rejects_invalid_config() {
+        // Fail-close: save must run Config::validate first so a corrupted
+        // in-memory state cannot overwrite a good profiles.json on disk.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut config = Config::default();
+        config.profiles.push(Profile::new_vless(
+            "Broken".to_string(),
+            "1.2.3.4".to_string(),
+            443,
+            "not-a-uuid".to_string(),
+        ));
+        let err = crate::config::save_config_at(file.path(), &config).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("Refusing to save"), "Error was: {}", msg);
+    }
+
+    #[test]
+    fn config_rejects_unknown_field_in_shadowsocks_config() {
+        // deny_unknown_fields on ShadowsocksConfig catches typos in the
+        // per-protocol block. Verifies point 2 of the validation hardening.
+        let json = r#"{
+            "profiles": [{
+                "name": "SS",
+                "protocol": "shadowsocks",
+                "address": "1.2.3.4",
+                "port": 8388,
+                "method": "aes-256-gcm",
+                "password": "pw",
+                "bogus": "typo"
+            }]
+        }"#;
+        let result: Result<Config, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "Expected deny_unknown_fields to reject");
     }
 
     #[test]

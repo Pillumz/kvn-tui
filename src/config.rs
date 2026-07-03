@@ -25,7 +25,14 @@ pub fn load_config_at(path: &Path) -> Result<Config> {
 }
 
 /// Save configuration to a specific path atomically.
+///
+/// Fail-close on invalid input: [`Config::validate`] runs before the file is
+/// touched, so a broken in-memory state cannot overwrite a good `profiles.json`.
 pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
+    config
+        .validate()
+        .context("Refusing to save invalid config")?;
+
     let dir = path.parent().context("Invalid config path")?;
     fs::create_dir_all(dir)?;
 
@@ -95,7 +102,7 @@ mod tests {
             "Test".to_string(),
             "1.2.3.4".to_string(),
             443,
-            "uuid".to_string(),
+            crate::test_helpers::TEST_UUID.to_string(),
         ));
 
         save_config_at(&path, &config).unwrap();
@@ -136,7 +143,7 @@ mod tests {
             "PathTest".to_string(),
             "9.9.9.9".to_string(),
             443,
-            "uuid".to_string(),
+            crate::test_helpers::TEST_UUID.to_string(),
         ));
         save_config(&config).unwrap();
 

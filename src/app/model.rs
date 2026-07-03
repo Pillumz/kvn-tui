@@ -211,8 +211,26 @@ impl Model {
     }
 
     /// Initialize application state and load persisted configuration.
+    ///
+    /// Load and validation errors are logged and fall back to
+    /// [`Config::default`]; the daemon must always start so the TUI can
+    /// surface the problem to the user.
     pub fn new() -> anyhow::Result<Self> {
-        let config = load_config().unwrap_or_default();
+        let config = match load_config() {
+            Ok(cfg) => match cfg.validate() {
+                Ok(()) => cfg,
+                Err(e) => {
+                    tracing::error!(
+                        "Loaded config failed validation, falling back to defaults: {e:#}"
+                    );
+                    Config::default()
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to load config, using defaults: {e:#}");
+                Config::default()
+            }
+        };
         let default_selected = 0;
 
         // Detect a background session left by a previous "hide" (q) action.
@@ -719,7 +737,7 @@ mod tests {
             "Auto".to_string(),
             "1.1.1.1".to_string(),
             443,
-            "u1".to_string(),
+            crate::test_helpers::TEST_UUID.to_string(),
         );
         let id = profile.id;
         config.profiles.push(profile);
@@ -744,7 +762,7 @@ mod tests {
             "Alpha".to_string(),
             "1.1.1.1".to_string(),
             443,
-            "u1".to_string(),
+            crate::test_helpers::TEST_UUID.to_string(),
         )]);
         // Save should not panic and must write into the temp directory.
         let _ = model.save();

@@ -19,6 +19,10 @@ pub fn buffer_to_string(buffer: &Buffer) -> String {
         .join("\n")
 }
 
+/// A canonical valid UUID string for tests that need to pass
+/// [`Config::validate`] without caring about the specific value.
+pub const TEST_UUID: &str = "11111111-1111-1111-1111-111111111111";
+
 /// Generate a small set of sample profiles for unit tests.
 pub fn sample_profiles() -> Vec<Profile> {
     vec![
@@ -26,19 +30,19 @@ pub fn sample_profiles() -> Vec<Profile> {
             "A".to_string(),
             "1.1.1.1".to_string(),
             443,
-            "u1".to_string(),
+            TEST_UUID.to_string(),
         ),
         Profile::new_vless(
             "B".to_string(),
             "2.2.2.2".to_string(),
             443,
-            "u2".to_string(),
+            TEST_UUID.to_string(),
         ),
         Profile::new_vless(
             "C".to_string(),
             "3.3.3.3".to_string(),
             443,
-            "u3".to_string(),
+            TEST_UUID.to_string(),
         ),
     ]
 }
