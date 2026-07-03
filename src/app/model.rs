@@ -212,22 +212,27 @@ impl Model {
 
     /// Initialize application state and load persisted configuration.
     ///
-    /// Load and validation errors are logged and fall back to
-    /// [`Config::default`]; the daemon must always start so the TUI can
-    /// surface the problem to the user.
+    /// Load and validation errors fall back to [`Config::default`] — the
+    /// daemon must always start so the TUI can surface the problem to the
+    /// user. The captured error is stashed and applied to the status/log/
+    /// overlay after the [`Model`] is constructed (see the `startup_error`
+    /// block near the end of this function).
     pub fn new() -> anyhow::Result<Self> {
+        let mut startup_error: Option<String> = None;
         let config = match load_config() {
             Ok(cfg) => match cfg.validate() {
                 Ok(()) => cfg,
                 Err(e) => {
-                    tracing::error!(
-                        "Loaded config failed validation, falling back to defaults: {e:#}"
-                    );
+                    let msg = format!("Config invalid, using defaults: {e:#}");
+                    tracing::error!("{msg}");
+                    startup_error = Some(msg);
                     Config::default()
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to load config, using defaults: {e:#}");
+                let msg = format!("Failed to load config, using defaults: {e:#}");
+                tracing::error!("{msg}");
+                startup_error = Some(msg);
                 Config::default()
             }
         };
@@ -311,6 +316,13 @@ impl Model {
             model.status = status;
         } else {
             model.set_status(status);
+        }
+        // A load/validate failure at startup must reach the user — set the
+        // error status (pushes into the log panel via set_status) and pop
+        // the error overlay so it's not masked by the geo-region overlay.
+        if let Some(msg) = startup_error {
+            model.set_status(AppStatus::Error(msg));
+            model.overlay = Overlay::Error;
         }
         Ok(model)
     }
@@ -750,6 +762,72 @@ mod tests {
         let model = Model::new().unwrap();
         assert_eq!(model.connection, ConnectionState::Idle);
         assert_eq!(model.overlay, Overlay::GeoRegions);
+    }
+
+    #[test]
+    fn new_surfaces_invalid_config_via_error_overlay() {
+        // profiles.json that parses but fails semantic validation (garbage
+        // UUID) must not silently swallow the error — the TUI needs to show
+        // it via the Error overlay and drop the message into the log panel.
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+
+        let path = crate::paths::profiles_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Handwritten JSON — bypasses save_config's fail-close guard.
+        let json = r#"{
+            "schema_version": 2,
+            "profiles": [{
+                "name": "Broken",
+                "protocol": "vless",
+                "address": "1.2.3.4",
+                "port": 443,
+                "uuid": "not-a-uuid"
+            }]
+        }"#;
+        std::fs::write(&path, json).unwrap();
+
+        let model = Model::new().unwrap();
+        assert_eq!(model.overlay, Overlay::Error);
+        assert!(
+            model.status.is_error(),
+            "status not error: {:?}",
+            model.status
+        );
+        assert!(
+            model.status.text().contains("Config invalid"),
+            "status was: {}",
+            model.status.text(),
+        );
+        // Fell back to defaults, so the broken profile is not visible.
+        assert!(model.config.profiles.is_empty());
+        // Error is also persisted in the log panel (survives status overwrite).
+        assert!(
+            model.logs.iter().any(|l| l.contains("Config invalid")),
+            "logs: {:?}",
+            model.logs,
+        );
+    }
+
+    #[test]
+    fn new_surfaces_load_error_when_json_is_malformed() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+
+        let path = crate::paths::profiles_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "not json at all").unwrap();
+
+        let model = Model::new().unwrap();
+        assert_eq!(model.overlay, Overlay::Error);
+        assert!(model.status.is_error());
+        assert!(
+            model.status.text().contains("Failed to load"),
+            "status was: {}",
+            model.status.text(),
+        );
     }
 
     #[test]
