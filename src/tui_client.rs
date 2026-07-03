@@ -186,15 +186,27 @@ fn run_loop(
                             let _ = event::read();
                         }
                         event_reading_enabled.store(true, Ordering::Relaxed);
-                        if result.is_ok() {
-                            if let Ok(config) = crate::config::load_config() {
-                                model.selected = crate::app::model::row_for_profile(
-                                    &config,
-                                    config.resolve_selected(),
-                                );
-                                model.config = config;
+                        match result {
+                            Ok(_) => {
+                                if let Ok(config) = crate::config::load_config() {
+                                    model.selected = crate::app::model::row_for_profile(
+                                        &config,
+                                        config.resolve_selected(),
+                                    );
+                                    model.config = config;
+                                }
+                                client.send(&IpcCommand::ReloadConfig)?;
                             }
-                            client.send(&IpcCommand::ReloadConfig)?;
+                            Err(e) => {
+                                // ConfigBackup restored the original file, so
+                                // profiles.json is intact — but the user's
+                                // edits are gone. Surface why so they can
+                                // retry instead of wondering what happened.
+                                model.set_status(crate::app::model::AppStatus::Error(format!(
+                                    "Edit rejected: {e:#}"
+                                )));
+                                model.overlay = crate::app::model::Overlay::Error;
+                            }
                         }
                         needs_redraw = true;
                     }
