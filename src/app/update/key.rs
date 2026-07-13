@@ -372,8 +372,9 @@ pub(super) fn handle_ipc_command(
         }
         IpcCommand::Quit => vec![Effect::Quit],
         IpcCommand::ClientError { message } => {
-            model.set_status(crate::app::model::AppStatus::Error(message));
-            vec![]
+            let mut inner = Vec::new();
+            push_status(&mut inner, model, AppStatus::Error(message));
+            inner
         }
     };
     effects.push(Effect::BroadcastState);

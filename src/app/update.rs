@@ -775,11 +775,17 @@ mod tests {
                 message: "Edit rejected: bad UUID".into(),
             },
         );
-        assert_eq!(effects, vec![Effect::BroadcastState]);
+        assert_eq!(
+            effects,
+            vec![
+                app_log_error("Edit rejected: bad UUID"),
+                Effect::BroadcastState,
+            ]
+        );
         assert!(model.status.is_error(), "status: {:?}", model.status);
         assert_eq!(model.status.text(), "Edit rejected: bad UUID");
-        // set_status also pushes into the log panel so the message survives
-        // a later status overwrite.
+        // set_status also pushes into the in-memory log panel so the message
+        // survives a later status overwrite.
         assert!(model.logs.iter().any(|l| l.contains("Edit rejected")));
     }
 

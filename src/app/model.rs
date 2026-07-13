@@ -316,9 +316,12 @@ impl Model {
         } else {
             model.set_status(status);
         }
-        // A load/validate failure at startup must reach the user — set the
-        // error status (also appends to the log panel via set_status).
+        // A load/validate failure at startup must reach the user. set_status
+        // populates the status bar and the in-memory log panel; the extra
+        // append_app_log write persists it to `~/.config/kvn-tui/logs/app.log`
+        // so the user can still see the reason after restarting the TUI.
         if let Some(msg) = startup_error {
+            crate::services::log_tailer::append_app_log("ERROR", &msg);
             model.set_status(AppStatus::Error(msg));
         }
         Ok(model)
@@ -760,13 +763,17 @@ mod tests {
     fn new_surfaces_invalid_config_in_status_and_log() {
         // profiles.json that parses but fails semantic validation (garbage
         // UUID) must not silently swallow the error — the TUI needs to show
-        // it via the red status bar and persist it in the log panel.
+        // it via the red status bar, the in-memory log panel, and the on-disk
+        // app.log so the user can still see it after restarting.
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
 
+        // Model::new writes to app.log, which requires the logs subdirectory
+        // to exist; production code calls ensure_config_dirs() in main().
+        crate::paths::ensure_config_dirs().unwrap();
+
         let path = crate::paths::profiles_path().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         // Handwritten JSON — bypasses save_config's fail-close guard.
         let json = r#"{
             "schema_version": 2,
@@ -793,11 +800,17 @@ mod tests {
         );
         // Fell back to defaults, so the broken profile is not visible.
         assert!(model.config.profiles.is_empty());
-        // Error is also persisted in the log panel (survives status overwrite).
+        // Error is also persisted in the in-memory log panel.
         assert!(
             model.logs.iter().any(|l| l.contains("Config invalid")),
             "logs: {:?}",
             model.logs,
+        );
+        // …and on disk in app.log.
+        let on_disk = std::fs::read_to_string(crate::paths::app_log_path()).unwrap();
+        assert!(
+            on_disk.contains("Config invalid") && on_disk.contains("ERROR"),
+            "app.log was: {on_disk:?}",
         );
     }
 

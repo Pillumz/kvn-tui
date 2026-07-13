@@ -200,16 +200,13 @@ fn run_loop(
                             Err(e) => {
                                 // ConfigBackup restored the original file, so
                                 // profiles.json is intact — but the user's
-                                // edits are gone. Send the message to the
-                                // daemon so it lands in *its* model: setting
-                                // status/overlay locally is pointless because
-                                // apply_snapshot overwrites them on the next
-                                // broadcast. Also push into the client-side
-                                // log panel (apply_snapshot does not touch
-                                // `logs`) so the message survives dismissal
-                                // of the error overlay.
+                                // edits are gone. Route the message through
+                                // the daemon: it updates its own model's
+                                // status (surviving apply_snapshot on the
+                                // client) and appends to app.log, which the
+                                // client's LogTailer picks up on the next
+                                // tick and shows in the log panel.
                                 let message = format!("Edit rejected: {e:#}");
-                                model.push_log(message.clone());
                                 client.send(&IpcCommand::ClientError { message })?;
                             }
                         }
