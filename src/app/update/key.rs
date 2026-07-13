@@ -33,7 +33,7 @@ pub(super) fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 /// the bundled palette names in alphabetical order.
 pub fn theme_picker_slugs() -> Vec<String> {
     let mut out = Vec::new();
-    if crate::tui_client::theme_watch::detect_omarchy_theme().is_some() {
+    if crate::omarchy::detect_omarchy_theme().is_some() {
         out.push(crate::tui_client::theme_watch::OMARCHY_SENTINEL.to_string());
     }
     out.extend(
@@ -49,7 +49,7 @@ pub fn theme_picker_slugs() -> Vec<String> {
 /// see what would be applied; all others are returned verbatim.
 fn theme_picker_label(slug: &str) -> String {
     if slug == crate::tui_client::theme_watch::OMARCHY_SENTINEL {
-        match crate::tui_client::theme_watch::detect_omarchy_theme() {
+        match crate::omarchy::detect_omarchy_theme() {
             Some(name) => format!("Auto (Omarchy: {name})"),
             None => "Auto (Omarchy)".to_string(),
         }

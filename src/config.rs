@@ -50,9 +50,20 @@ pub fn save_config_at(path: &Path, config: &Config) -> Result<()> {
 }
 
 /// Load configuration from disk, or return default if not present.
+///
+/// On first launch (no `profiles.json` yet) under Omarchy, override the
+/// default theme with the [`profile::OMARCHY_THEME_SENTINEL`] so the TUI
+/// automatically follows the system theme instead of always starting on
+/// `tokyo-night`. Existing configs are left untouched — the user's stored
+/// theme choice always wins.
 pub fn load_config() -> Result<Config> {
     let path = crate::paths::profiles_path().context("Failed to determine profiles path")?;
-    load_config_at(&path)
+    let is_first_launch = !path.exists();
+    let mut config = load_config_at(&path)?;
+    if is_first_launch && crate::omarchy::detect_omarchy_theme().is_some() {
+        config.settings.theme = profile::OMARCHY_THEME_SENTINEL.to_string();
+    }
+    Ok(config)
 }
 
 /// Save configuration to disk atomically.
@@ -127,6 +138,48 @@ mod tests {
         write!(file, "not json at all").unwrap();
         let result = load_config_at(file.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_config_first_launch_on_omarchy_sets_sentinel() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let _ = std::fs::remove_file(crate::paths::profiles_path().unwrap());
+        let current = dir.path().join("omarchy").join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("theme.name"), "catppuccin-mocha\n").unwrap();
+
+        let config = load_config().unwrap();
+        assert_eq!(config.settings.theme, profile::OMARCHY_THEME_SENTINEL);
+    }
+
+    #[test]
+    fn load_config_first_launch_without_omarchy_keeps_default() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let _ = std::fs::remove_file(crate::paths::profiles_path().unwrap());
+
+        let config = load_config().unwrap();
+        assert_eq!(config.settings.theme, "tokyo-night");
+    }
+
+    #[test]
+    fn load_config_existing_file_ignores_omarchy() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let current = dir.path().join("omarchy").join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("theme.name"), "gruvbox\n").unwrap();
+
+        let mut stored = Config::default();
+        stored.settings.theme = "tokyo-night".to_string();
+        save_config(&stored).unwrap();
+
+        let loaded = load_config().unwrap();
+        assert_eq!(loaded.settings.theme, "tokyo-night");
     }
 
     #[test]

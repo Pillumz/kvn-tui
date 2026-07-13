@@ -11,6 +11,7 @@ mod config;
 mod daemon;
 mod geo;
 mod ipc;
+mod omarchy;
 mod paths;
 mod services;
 mod singbox;

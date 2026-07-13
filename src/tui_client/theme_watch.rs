@@ -1,4 +1,4 @@
-//! Detect and follow the active Omarchy theme.
+//! Follow the active Omarchy theme at runtime.
 //!
 //! Omarchy stores its active theme as a single-line slug in
 //! `~/.config/omarchy/current/theme.name`. On theme change the whole
@@ -7,9 +7,11 @@
 //! gets unlinked-then-recreated is unreliable across most file-watcher
 //! backends.
 //!
-//! On non-Omarchy systems neither the directory nor the file exists, so the
-//! detector returns `None` and the watcher exits immediately without
-//! spawning any background work.
+//! On non-Omarchy systems the watched directory does not exist and the
+//! watcher exits immediately without spawning any background work.
+//!
+//! The filesystem-level detection helpers live in [`crate::omarchy`] so the
+//! daemon-side config loader can share them without depending on the TUI.
 
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
@@ -19,6 +21,7 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 
 use crate::app::msg::Msg;
+use crate::omarchy::{detect_omarchy_theme, omarchy_current_dir, theme_name_path};
 use crate::ui::styles::Theme;
 
 /// Sentinel slug stored in `Settings.theme` to mean "follow Omarchy's
@@ -29,20 +32,6 @@ pub const OMARCHY_SENTINEL: &str = "omarchy";
 /// Default fallback theme used when `OMARCHY_SENTINEL` is set but
 /// Omarchy isn't installed. Matches `Settings::default().theme`.
 pub const DEFAULT_THEME: &str = "tokyo-night";
-
-/// Read the currently active Omarchy theme slug from
-/// `$XDG_CONFIG_HOME/omarchy/current/theme.name`, with the conventional
-/// fallback to `~/.config`.
-pub fn detect_omarchy_theme() -> Option<String> {
-    let path = theme_name_path()?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
 
 /// Resolve a `Settings.theme` slug into a concrete [`Theme`]. The
 /// reserved slug [`OMARCHY_SENTINEL`] means "follow Omarchy's current
@@ -118,60 +107,12 @@ fn run_watcher(tx: Sender<Msg>, watch_dir: PathBuf, theme_file: PathBuf) {
     }
 }
 
-fn omarchy_current_dir() -> Option<PathBuf> {
-    Some(config_home()?.join("omarchy").join("current"))
-}
-
-fn theme_name_path() -> Option<PathBuf> {
-    Some(omarchy_current_dir()?.join("theme.name"))
-}
-
-fn config_home() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        let p = PathBuf::from(xdg);
-        if !p.as_os_str().is_empty() {
-            return Some(p);
-        }
-    }
-    dirs::config_dir()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// `ENV_LOCK` is shared with other tests that mutate `XDG_CONFIG_HOME`.
     use crate::test_helpers::ENV_LOCK;
-
-    #[test]
-    fn detect_returns_none_when_file_missing() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        assert!(detect_omarchy_theme().is_none());
-    }
-
-    #[test]
-    fn detect_reads_trimmed_slug_from_theme_name() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let current = dir.path().join("omarchy").join("current");
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::write(current.join("theme.name"), "  gruvbox  \n").unwrap();
-        assert_eq!(detect_omarchy_theme().as_deref(), Some("gruvbox"));
-    }
-
-    #[test]
-    fn detect_treats_empty_file_as_missing() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let current = dir.path().join("omarchy").join("current");
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::write(current.join("theme.name"), "   \n").unwrap();
-        assert!(detect_omarchy_theme().is_none());
-    }
 
     #[test]
     fn resolve_active_uses_named_slug_directly() {
