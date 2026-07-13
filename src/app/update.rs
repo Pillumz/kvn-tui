@@ -86,7 +86,6 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::SubscriptionFetched { id, result } => handle_subscription_result(model, id, result),
         Msg::ConnectFailed(err) => {
             model.connection = ConnectionState::Idle;
-            model.overlay = Overlay::Error;
             model.traffic = TrafficStats::default();
             model.last_traffic_sample_at_ms = 0;
             model.last_traffic_fetch_at = None;
@@ -768,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_command_client_error_sets_status_and_overlay() {
+    fn ipc_command_client_error_sets_status_and_logs() {
         let mut model = model_with_profiles(vec![]);
         let effects = handle_ipc_command(
             &mut model,
@@ -779,9 +778,8 @@ mod tests {
         assert_eq!(effects, vec![Effect::BroadcastState]);
         assert!(model.status.is_error(), "status: {:?}", model.status);
         assert_eq!(model.status.text(), "Edit rejected: bad UUID");
-        assert_eq!(model.overlay, crate::app::model::Overlay::Error);
         // set_status also pushes into the log panel so the message survives
-        // dismissal of the overlay.
+        // a later status overwrite.
         assert!(model.logs.iter().any(|l| l.contains("Edit rejected")));
     }
 
@@ -870,15 +868,6 @@ mod tests {
     fn help_mode_any_key_returns_to_normal() {
         let mut model = model_with_profiles(vec![]);
         model.overlay = Overlay::Help;
-        let effects = handle_key(&mut model, key('x'));
-        assert_eq!(model.overlay, Overlay::None);
-        assert!(effects.is_empty());
-    }
-
-    #[test]
-    fn error_mode_any_key_returns_to_normal() {
-        let mut model = model_with_profiles(vec![]);
-        model.overlay = Overlay::Error;
         let effects = handle_key(&mut model, key('x'));
         assert_eq!(model.overlay, Overlay::None);
         assert!(effects.is_empty());
@@ -1398,14 +1387,15 @@ mod tests {
     }
 
     #[test]
-    fn connect_failed_sets_error_mode() {
+    fn connect_failed_sets_status_error() {
         let mut model = Model::test_new(crate::config::profile::Config::default());
         let effects = update(
             &mut model,
             Msg::ConnectFailed(crate::app::msg::IpcError::new("timeout")),
         );
-        assert_eq!(model.overlay, Overlay::Error);
         assert_eq!(model.connection, ConnectionState::Idle);
+        assert!(model.status.is_error());
+        assert!(model.status.text().contains("Connection failed: timeout"));
         assert_eq!(
             effects,
             vec![

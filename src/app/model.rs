@@ -14,7 +14,6 @@ pub enum Overlay {
     None,
     Help,
     ConfirmDelete,
-    Error,
     RoutingMode,
     GeoRegions,
     DnsSettings,
@@ -214,9 +213,9 @@ impl Model {
     ///
     /// Load and validation errors fall back to [`Config::default`] — the
     /// daemon must always start so the TUI can surface the problem to the
-    /// user. The captured error is stashed and applied to the status/log/
-    /// overlay after the [`Model`] is constructed (see the `startup_error`
-    /// block near the end of this function).
+    /// user. The captured error is stashed and applied to the status (which
+    /// also appends to the log panel) after the [`Model`] is constructed
+    /// (see the `startup_error` block near the end of this function).
     pub fn new() -> anyhow::Result<Self> {
         let mut startup_error: Option<String> = None;
         let config = match load_config() {
@@ -318,11 +317,9 @@ impl Model {
             model.set_status(status);
         }
         // A load/validate failure at startup must reach the user — set the
-        // error status (pushes into the log panel via set_status) and pop
-        // the error overlay so it's not masked by the geo-region overlay.
+        // error status (also appends to the log panel via set_status).
         if let Some(msg) = startup_error {
             model.set_status(AppStatus::Error(msg));
-            model.overlay = Overlay::Error;
         }
         Ok(model)
     }
@@ -672,23 +669,18 @@ mod tests {
     #[test]
     fn set_status_clears_error_and_mode() {
         let mut model = model_with_profiles(vec![]);
-        model.overlay = Overlay::Error;
         model.status = AppStatus::Error("oops".into());
         model.status = AppStatus::Info("ok".into());
-        model.overlay = Overlay::None;
         assert_eq!(model.status.text(), "ok");
         assert!(!model.status.is_error());
-        assert_eq!(model.overlay, Overlay::None);
     }
 
     #[test]
     fn set_error_sets_message_and_mode() {
         let mut model = model_with_profiles(vec![]);
         model.status = AppStatus::Error("fail".into());
-        model.overlay = Overlay::Error;
         assert_eq!(model.status.text(), "fail");
         assert!(model.status.is_error());
-        assert_eq!(model.overlay, Overlay::Error);
     }
 
     #[test]
@@ -765,10 +757,10 @@ mod tests {
     }
 
     #[test]
-    fn new_surfaces_invalid_config_via_error_overlay() {
+    fn new_surfaces_invalid_config_in_status_and_log() {
         // profiles.json that parses but fails semantic validation (garbage
         // UUID) must not silently swallow the error — the TUI needs to show
-        // it via the Error overlay and drop the message into the log panel.
+        // it via the red status bar and persist it in the log panel.
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
@@ -789,7 +781,6 @@ mod tests {
         std::fs::write(&path, json).unwrap();
 
         let model = Model::new().unwrap();
-        assert_eq!(model.overlay, Overlay::Error);
         assert!(
             model.status.is_error(),
             "status not error: {:?}",
@@ -821,12 +812,16 @@ mod tests {
         std::fs::write(&path, "not json at all").unwrap();
 
         let model = Model::new().unwrap();
-        assert_eq!(model.overlay, Overlay::Error);
         assert!(model.status.is_error());
         assert!(
             model.status.text().contains("Failed to load"),
             "status was: {}",
             model.status.text(),
+        );
+        assert!(
+            model.logs.iter().any(|l| l.contains("Failed to load")),
+            "logs: {:?}",
+            model.logs,
         );
     }
 

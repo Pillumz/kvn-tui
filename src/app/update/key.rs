@@ -25,10 +25,6 @@ pub(super) fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         Overlay::GeoRegions => handle_geo_region(model, key),
         Overlay::DnsSettings => handle_dns_settings(model, key),
         Overlay::ThemeSettings => handle_theme_picker(model, key),
-        Overlay::Error => {
-            model.overlay = Overlay::None;
-            vec![]
-        }
     }
 }
 
@@ -377,7 +373,6 @@ pub(super) fn handle_ipc_command(
         IpcCommand::Quit => vec![Effect::Quit],
         IpcCommand::ClientError { message } => {
             model.set_status(crate::app::model::AppStatus::Error(message));
-            model.overlay = crate::app::model::Overlay::Error;
             vec![]
         }
     };

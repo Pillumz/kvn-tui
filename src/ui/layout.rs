@@ -55,7 +55,6 @@ pub fn draw(frame: &mut Frame, model: &Model) {
     match model.overlay {
         Overlay::Help => draw_help(frame, theme, area),
         Overlay::ConfirmDelete => draw_confirm_delete(frame, model, area),
-        Overlay::Error => draw_error(frame, theme, area, model.status.text()),
         Overlay::RoutingMode => draw_routing_mode(frame, model, area),
         Overlay::GeoRegions => draw_geo_region(frame, model, area),
         Overlay::DnsSettings => draw_dns_settings(frame, model, area),
@@ -208,24 +207,6 @@ fn draw_confirm_delete(frame: &mut Frame, model: &Model, area: Rect) {
             Line::from(Span::styled(message, theme.error())),
             Line::from(""),
             Line::from("Press y to confirm, n to cancel"),
-        ],
-        POPUP_HEIGHT_PERCENT,
-    );
-}
-
-/// Draw an error message popup.
-fn draw_error(frame: &mut Frame, theme: &Theme, area: Rect, message: &str) {
-    draw_modal(
-        frame,
-        theme,
-        area,
-        " Error ",
-        vec![
-            Line::from(Span::styled("Error", theme.error())),
-            Line::from(""),
-            Line::from(message),
-            Line::from(""),
-            Line::from("Press any key to dismiss"),
         ],
         POPUP_HEIGHT_PERCENT,
     );
@@ -983,15 +964,6 @@ mod tests {
         )]);
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::ConfirmDelete;
-        insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
-    }
-
-    #[test]
-    fn draw_error_overlay_snapshot() {
-        let mut model = model_with_profiles(vec![]);
-        model.geo_last_updated = Some("2026-05-31 13:41".to_string());
-        model.overlay = Overlay::Error;
-        model.status = crate::app::model::AppStatus::Error("something went wrong".to_string());
         insta::assert_snapshot!(snapshot_terminal(&model, 80, 20));
     }
 
