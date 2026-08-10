@@ -273,9 +273,10 @@ Press `?` at any time to see the full key map.
 | `p` | Paste share link or subscription URL from clipboard |
 | `y` | Yank selected profile as a share link (or subscription source URL) to clipboard |
 | `d` | Delete selected profile |
-| `e` | Open `profiles.json` in `$EDITOR` |
 | `u` | Update selected subscription or geoip/geosite databases |
 | `i` | Cycle subscription auto-update interval |
+| `I` | Cycle geoip/geosite auto-update interval |
+| `e` | Open `profiles.json` in `$EDITOR` |
 
 **Connection & routing**
 
