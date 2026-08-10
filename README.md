@@ -17,20 +17,30 @@
 ## Contents
 
 - [Features](#features)
-- [Supported Protocols](#supported-protocols)
-- [Technology Stack](#technology-stack)
 - [Installation (Arch Linux)](#installation-arch-linux)
+  - [Install from AUR](#install-from-aur-recommended)
+  - [Daemon autostart](#daemon-autostart)
+  - [Omarchy setup](#omarchy-setup)
+  - [Polkit setup](#polkit-setup-recommended)
+  - [Kill switch setup](#kill-switch-setup-optional)
+  - [Build from source](#build--install-from-source)
 - [Quick Start](#quick-start)
+- [Default Key Bindings](#default-key-bindings)
+- [Supported Protocols](#supported-protocols)
 - [Configuration](#configuration)
+- [Technology Stack](#technology-stack)
+- [Architecture Highlights](#architecture-highlights)
 - [Upgrading to v0.20.0](#upgrading-to-v0200)
+- [Author](#author)
+- [License](#license)
 
 ---
 
 ## Features
 
 - **Vim-style navigation** — `j`/`k` to move, `g`/`G` to jump, `?` for help
-- **Profile management** — edit via `$EDITOR`, delete, and organize server profiles
-- **One-click paste** — import share links for any supported protocol or subscription URLs directly from the system clipboard
+- **Profile management** — edit server profiles via `$EDITOR` and delete them from the TUI
+- **Clipboard import** — import share links for any supported protocol or subscription URLs directly from the system clipboard
 - **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
 - **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets with `u` or cycle background auto-update (`off` / `12h` / `1d` / `3d` / `7d`) with `Shift+I`
@@ -41,51 +51,6 @@
 - **Live logs** — split-pane view interleaves sing-box output with app events; both streams are also persisted to `sing-box.log` and `app.log` on disk
 - **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
 - **Themable** — 19 bundled [Omarchy](https://omarchy.org/) palettes (gruvbox, tokyo-night, catppuccin, nord, kanagawa, rose-pine, …) compiled into the binary; pick interactively via `C` and persist the choice in `profiles.json`. On Omarchy systems the `omarchy` slug auto-follows `~/.config/omarchy/current/theme.name` and updates live on `omarchy theme set …`
-
----
-
-## Supported Protocols
-
-All sing-box 1.12+ outbound protocols are supported. Share links can be pasted directly from the clipboard or fetched via subscription URLs.
-
-| Protocol | Share-link scheme(s) | Notes |
-|----------|----------------------|-------|
-| **VLESS** | `vless://` | REALITY, XTLS Vision, TLS; gRPC / WebSocket / HTTPUpgrade transport |
-| **VMess** | `vmess://` | TLS; gRPC / WebSocket / HTTPUpgrade transport; base64-JSON and URI forms |
-| **Trojan** | `trojan://` | TLS; gRPC / WebSocket / HTTPUpgrade transport |
-| **Shadowsocks** | `ss://` | AEAD-2022 + AEAD ciphers; SIP002 and legacy base64 share-link forms |
-| **Hysteria 2** | `hysteria2://`, `hy2://` | QUIC; Salamander obfuscation |
-| **TUIC** | `tuic://` | QUIC; BBR / Cubic / NewReno congestion control |
-| **ShadowTLS** | `shadowtls://` | v1 / v2 / v3; wraps Shadowsocks as the inner transport |
-| **AnyTLS** | `anytls://` | TLS-based multiplexing |
-| **SOCKS** | `socks://`, `socks5://` | v5 (default) / v4a; optional username/password |
-| **HTTP proxy** | `http://`, `https://` | Plain or TLS CONNECT proxy |
-| **SSH** | `ssh://` | Password or private-key auth |
-
----
-
-## Technology Stack
-
-Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the following ecosystem:
-
-| Component | Library / Tool | Purpose |
-|-----------|--------------|---------|
-| TUI framework | [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal UI rendering and input handling |
-| VPN backend | [sing-box](https://sing-box.sagernet.org/) (external binary) | Actual VPN engine (TUN, routing, protocols) |
-| Serialization | [serde](https://serde.rs/) + `serde_json` | Configuration and profile storage |
-| HTTP client | [ureq](https://github.com/algesten/ureq) | Geo database downloads |
-| D-Bus integration | [zbus](https://docs.rs/zbus/latest/zbus/) | Suspend/resume detection via `systemd-logind` |
-| Logging | [tracing](https://github.com/tokio-rs/tracing) | Structured application logs |
-| Error handling | [anyhow](https://github.com/dtolnay/anyhow) | Ergonomic error propagation |
-| Utilities | `uuid`, `chrono`, `url`, `urlencoding`, `dirs` | IDs, timestamps, URI parsing, XDG directories |
-
-### Architecture Highlights
-
-- **Daemon + TUI client** — headless daemon owns sing-box and state, TUI is just a thin renderer; they talk NDJSON over a Unix socket, so re-running `kvn-tui` re-attaches without restarting sing-box.
-- **TEA (The Elm Architecture)** — pure `Model` / `update` / `Effect` layers; `update.rs` is fully synchronous and side-effect-free, making business logic trivial to unit-test.
-- **sing-box runner** — generates valid sing-box 1.12+ JSON from profile data, validates with `sing-box check`, and spawns the process with crash detection.
-- **Atomic config writes** — `profiles.json` is written to a temp file and renamed to prevent corruption.
-- **State I/O** — connection status and active profile are persisted to `state.json` for waybar integration and crash recovery.
 
 ---
 
@@ -180,14 +145,15 @@ Once installed, press `K` in the TUI to enable or disable the kill switch. The s
 - **Rust** >= 1.87
 - **sing-box** >= 1.12 (external VPN backend, must be available on `$PATH`)
 - `base-devel`, `dbus`
+- `wl-clipboard` on Wayland, or `xclip` / `xsel` on X11, for clipboard import and export
 
 Install the dependencies:
 
 ```bash
-yay -S base-devel rust dbus sing-box
+yay -S base-devel rust dbus sing-box wl-clipboard
 ```
 
-> `makepkg -si` will pull these automatically from the PKGBUILD `depends`/`makedepends`, but installing them beforehand avoids surprises.
+> `makepkg -si` pulls the required build and runtime dependencies automatically. Clipboard tools are optional dependencies; replace `wl-clipboard` with `xclip` or `xsel` on X11.
 
 #### Steps
 
@@ -242,7 +208,7 @@ kvn-tui
 > automatically. For a manual install, run once:
 >
 > ```bash
-> sudo setcap cap_net_admin,cap_net_raw+ep /usr/bin/sing-box
+> sudo setcap cap_net_admin,cap_net_raw+ep "$(command -v sing-box)"
 > ```
 
 On first launch a modal overlay prompts you to pick a geo region (Russia, China, Iran, or Global). After that, the main UI opens with an empty profile list.
@@ -254,6 +220,8 @@ Typical first connection:
 3. Select a profile with `j` / `k` and press `Enter` to connect. The status bar shows `[CONNECTED]` and the traffic header starts ticking.
 
 Press `?` at any time to see the full key map.
+
+> **Detach vs quit:** `q` or `Esc` exits only the TUI; the daemon and active VPN connection keep running. `Ctrl+C` stops the daemon, disconnects sing-box, and exits completely.
 
 ### Default Key Bindings
 
@@ -304,6 +272,26 @@ Press `?` at any time to see the full key map.
 
 ---
 
+## Supported Protocols
+
+`kvn-tui` currently supports the following sing-box outbound protocols and share-link formats. Share links can be pasted directly from the clipboard or fetched via subscription URLs.
+
+| Protocol | Share-link scheme(s) | Notes |
+|----------|----------------------|-------|
+| **VLESS** | `vless://` | REALITY, XTLS Vision, TLS; gRPC / WebSocket / HTTPUpgrade transport |
+| **VMess** | `vmess://` | TLS; gRPC / WebSocket / HTTPUpgrade transport; base64-JSON and URI forms |
+| **Trojan** | `trojan://` | TLS; gRPC / WebSocket / HTTPUpgrade transport |
+| **Shadowsocks** | `ss://` | AEAD-2022 + AEAD ciphers; SIP002 and legacy base64 share-link forms |
+| **Hysteria 2** | `hysteria2://`, `hy2://` | QUIC; Salamander obfuscation |
+| **TUIC** | `tuic://` | QUIC; BBR / Cubic / NewReno congestion control |
+| **ShadowTLS** | `shadowtls://` | v1 / v2 / v3; wraps Shadowsocks as the inner transport |
+| **AnyTLS** | `anytls://` | TLS-based multiplexing |
+| **SOCKS** | `socks://`, `socks5://` | v5 (default) / v4a; optional username/password |
+| **HTTP proxy** | `http://`, `https://` | Plain or TLS CONNECT proxy |
+| **SSH** | `ssh://` | Password or private-key auth |
+
+---
+
 ## Configuration
 
 Configuration is stored in:
@@ -312,19 +300,20 @@ Configuration is stored in:
 ~/.config/kvn-tui/profiles.json
 ```
 
-The file contains your profile list and application settings (default profile, TUN interface name, DNS configuration, routing mode, auto-connect, geo region). You can edit it manually with the `e` keybinding or any text editor.
+The file contains your profile list and application settings (default profile, TUN interface name, DNS configuration, routing mode, auto-connect, geo region). You can edit it manually with the `e` keybinding or any text editor. Unknown fields are rejected during validation, so make a backup before making substantial manual changes.
 
 `settings.dns` maps directly onto the sing-box 1.12 DNS schema (`servers`, `rules`, `final_server`, `strategy`, `fakeip_enabled`). The `D` overlay covers the common cases — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle (`h` / `l` to preview, `Enter` to apply), and the fake-IP toggle. For custom upstreams or per-domain routing rules, edit `profiles.json` via `e`.
 
 When `auto_connect` is enabled, the application stores `last_connected_profile` and automatically connects to that profile on the next startup.
 
-`settings.geo_region` controls which country rule-sets are downloaded and which routing modes are available. Valid values: `ru`, `cn`, `ir`, or `global`.
+`settings.geo_routing.current_region` controls which country rule-sets are downloaded and which routing modes are available. Valid values: `ru`, `cn`, `ir`, or `global`. The `settings.geo_routing.selected_region_modes` map remembers the routing mode previously selected for each region, while `settings.geo_routing.auto_update` controls background rule-set updates.
+
 - `ru` — download RU geoip/geosite, enable Global / Bypass RU / Only RU
 - `cn` — download CN geoip/geosite, enable Global / Bypass CN / Only CN
 - `ir` — download IR geoip/geosite, enable Global / Bypass IR / Only IR
 - `global` — skip geo downloads, enable Global only
 
-On the very first launch (or after upgrading from an older version without `geo_region`), a modal overlay forces you to pick a region before the main UI becomes usable.
+On the very first launch (or when `geo_routing.current_region` is absent), a modal overlay forces you to pick a region before the main UI becomes usable.
 
 `settings.theme` is a string slug naming the active color palette. Default: `tokyo-night`. The reserved slug `omarchy` is a sentinel that auto-follows `~/.config/omarchy/current/theme.name` (and only appears as the `Auto` entry in the picker when Omarchy is installed). Any of the 19 bundled palettes can be selected by name — see `themes/*.toml` in the repository for the canonical list.
 
@@ -345,34 +334,34 @@ Logs are split across two files in:
 
 ---
 
+## Technology Stack
+
+Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the following ecosystem:
+
+| Component | Library / Tool | Purpose |
+|-----------|--------------|---------|
+| TUI framework | [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal UI rendering and input handling |
+| VPN backend | [sing-box](https://sing-box.sagernet.org/) (external binary) | Actual VPN engine (TUN, routing, protocols) |
+| Serialization | [serde](https://serde.rs/) + `serde_json` | Configuration and profile storage |
+| HTTP client | [ureq](https://github.com/algesten/ureq) | Geo database downloads |
+| D-Bus integration | [zbus](https://docs.rs/zbus/latest/zbus/) | Suspend/resume detection via `systemd-logind` |
+| Logging | [tracing](https://github.com/tokio-rs/tracing) | Structured application logs |
+| Error handling | [anyhow](https://github.com/dtolnay/anyhow) | Ergonomic error propagation |
+| Utilities | `uuid`, `chrono`, `url`, `urlencoding`, `dirs` | IDs, timestamps, URI parsing, XDG directories |
+
+### Architecture Highlights
+
+- **Daemon + TUI client** — headless daemon owns sing-box and state, TUI is just a thin renderer; they talk NDJSON over a Unix socket, so re-running `kvn-tui` re-attaches without restarting sing-box.
+- **TEA (The Elm Architecture)** — pure `Model` / `update` / `Effect` layers; `update.rs` is fully synchronous and side-effect-free, making business logic trivial to unit-test.
+- **sing-box runner** — generates valid sing-box 1.12+ JSON from profile data, validates with `sing-box check`, and spawns the process with crash detection.
+- **Atomic config writes** — `profiles.json` is written to a temp file and renamed to prevent corruption.
+- **State I/O** — connection status and active profile are persisted to `state.json` for waybar integration and crash recovery.
+
+---
+
 ## Upgrading to v0.20.0
 
-Starting with v0.20.0, the kvn-tui daemon is started by a systemd user service
-instead of Hyprland autostart. Upgrading the package installs the service but
-does not enable it automatically. If you are upgrading from v0.19.1 or earlier:
-
-1. If the old daemon is currently running, open `kvn-tui` and press `Ctrl+C` to
-   stop it. This also disconnects the active VPN connection.
-2. If you previously ran `kvn-tui --install-omarchy`, run it again to remove
-   the legacy daemon entry from Hyprland autostart. Skip this step on
-   non-Omarchy systems.
-3. Enable and start the service as your regular user, without `sudo`:
-
-   ```bash
-   systemctl --user enable --now kvn-tui.service
-   ```
-
-4. Confirm that the daemon is running:
-
-   ```bash
-   systemctl --user is-active kvn-tui.service
-   ```
-
-   The command should print `active`.
-
-The daemon will now start whenever you log in, independently of Hyprland. If
-`auto_connect` is enabled, kvn-tui reconnects the last profile automatically;
-otherwise, open the TUI and connect manually.
+Version 0.20.0 moved daemon startup from Hyprland autostart to a systemd user service. If you are upgrading from v0.19.1 or earlier, follow the [v0.20.0 migration guide](docs/migrations/v0.20.0.md).
 
 ---
 
