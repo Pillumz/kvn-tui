@@ -156,6 +156,7 @@ fn draw_help(frame: &mut Frame, theme: &Theme, area: Rect) {
         Row::new(vec!["o", "Geo region"]),
         Row::new(vec!["u", "Update subscription or geo"]),
         Row::new(vec!["i", "Cycle subscription auto-update"]),
+        Row::new(vec!["I", "Cycle geo auto-update"]),
         Row::new(vec!["e", "Open profiles.json in $EDITOR"]),
         Row::new(vec!["a", "Toggle auto-connect"]),
         Row::new(vec!["K", "Toggle kill switch"]),

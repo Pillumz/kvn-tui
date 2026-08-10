@@ -32,7 +32,7 @@
 - **One-click paste** — import share links for any supported protocol or subscription URLs directly from the system clipboard
 - **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
-- **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets in-app with `u`
+- **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets with `u` or cycle background auto-update (`off` / `12h` / `1d` / `3d` / `7d`) with `Shift+I`
 - **Kill switch** — block all outbound traffic if the VPN connection drops; toggled with `K`; powered by nftables + a systemd unit
 - **DNS configuration** — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle, fake-IP toggle (sing-box 1.12 API), plus custom servers and per-domain routing rules via `profiles.json`; opened with `D`
 - **Auto-connect** — automatically reconnect to the last used profile on startup

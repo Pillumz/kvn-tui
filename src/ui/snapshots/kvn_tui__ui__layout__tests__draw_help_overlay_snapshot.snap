@@ -22,6 +22,7 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │o            Geo region                       │               │
 │               │u            Update subscription or geo       │               │
 │               │i            Cycle subscription auto-update   │               │
+│               │I            Cycle geo auto-update            │               │
 │               │e            Open profiles.json in $EDITOR    │               │
 │               │a            Toggle auto-connect              │               │
 │               │K            Toggle kill switch               │               │
@@ -34,7 +35,6 @@ expression: "snapshot_terminal(&model, 80, 40)"
 │               │q / Esc      Detach TUI                       │               │
 │               │Ctrl+C       Quit                             │               │
 │               │?            Show this help                   │               │
-│               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
 │                                      ││                                      │
 │                                      ││                                      │

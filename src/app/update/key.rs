@@ -101,6 +101,17 @@ pub(super) fn handle_sources(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 .unwrap_or(0);
         }
         KeyCode::Char('u') => return handle_update_key(model),
+        KeyCode::Char('I') => {
+            let schedule = model.config.settings.geo_routing.auto_update.next();
+            model.config.settings.geo_routing.auto_update = schedule;
+            let mut effects = vec![Effect::SaveConfig];
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info(format!("Geo auto-update [{}]", schedule.label())),
+            );
+            return effects;
+        }
         KeyCode::Char('i') => {
             if let Some(idx) = model.selected_subscription_index() {
                 let (name, label) = if let Some(sub) = model.config.subscriptions.get_mut(idx) {
@@ -281,6 +292,7 @@ pub(super) fn handle_update_key(model: &mut Model) -> Vec<Effect> {
             return effects;
         }
         model.geo_updating = true;
+        model.geo_last_attempt_at = Some(chrono::Local::now());
         push_status(
             &mut effects,
             model,
@@ -543,6 +555,7 @@ pub(super) fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect>
                 // are present and download them automatically if they are missing.
                 if changed && region != GeoRegion::Global {
                     model.geo_updating = true;
+                    model.geo_last_attempt_at = Some(chrono::Local::now());
                     push_status(
                         &mut effects,
                         model,

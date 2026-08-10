@@ -30,8 +30,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Key(key) => handle_key(model, key),
         Msg::Tick => handle_tick(model),
         Msg::GeoUpdated(result) => handle_geo_result(model, result),
-        Msg::GeoLastUpdated(last_updated) => {
+        Msg::GeoMetadataRefreshed {
+            last_updated,
+            last_checked_at,
+        } => {
             model.geo_last_updated = last_updated;
+            model.geo_last_checked_at = last_checked_at;
+            model.geo_last_attempt_at = None;
             vec![Effect::BroadcastState]
         }
         Msg::SystemResumed => {
@@ -238,9 +243,17 @@ fn handle_config_reloaded(
 ) -> Vec<Effect> {
     match result {
         Ok(config) => {
+            let region_changed = model.config.settings.geo_routing.current_region
+                != config.settings.geo_routing.current_region;
             model.selected = crate::app::model::row_for_profile(&config, config.resolve_selected());
             model.config = config;
             let mut effects = vec![Effect::BroadcastState];
+            if region_changed {
+                model.geo_last_updated = None;
+                model.geo_last_checked_at = None;
+                model.geo_last_attempt_at = None;
+                effects.push(Effect::RefreshGeoLastUpdated);
+            }
             push_status(
                 &mut effects,
                 model,
@@ -263,8 +276,11 @@ fn handle_config_reloaded(
 fn handle_tick(model: &mut Model) -> Vec<Effect> {
     let mut effects = Vec::new();
 
-    // Check geo updates — in the new architecture geo runs in its own thread
-    // and sends GeoUpdated messages, so nothing to do here directly.
+    if geo_update_due(model, Local::now()) {
+        model.geo_updating = true;
+        model.geo_last_attempt_at = Some(Local::now());
+        effects.push(Effect::DownloadGeo);
+    }
 
     // Connection handling
     if model.connection == ConnectionState::Connecting {
@@ -308,6 +324,34 @@ fn handle_tick(model: &mut Model) -> Vec<Effect> {
     }
 
     effects
+}
+
+fn geo_update_due(model: &Model, now: chrono::DateTime<Local>) -> bool {
+    if model.geo_updating {
+        return false;
+    }
+    let Some(region) = model.config.settings.geo_routing.current_region else {
+        return false;
+    };
+    if region == GeoRegion::Global {
+        return false;
+    }
+    let interval = model
+        .config
+        .settings
+        .geo_routing
+        .auto_update
+        .interval_minutes();
+    if interval == 0 {
+        return false;
+    }
+    let reference = match (model.geo_last_checked_at, model.geo_last_attempt_at) {
+        (Some(checked), Some(attempt)) => Some(checked.max(attempt)),
+        (Some(checked), None) => Some(checked),
+        (None, Some(attempt)) => Some(attempt),
+        (None, None) => None,
+    };
+    reference.is_none_or(|last| now.signed_duration_since(last).num_minutes() >= interval as i64)
 }
 
 fn check_due_subscriptions(model: &mut Model) -> Vec<Effect> {
@@ -556,8 +600,10 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
         GeoResult::Updated {
             parts,
             last_updated,
+            checked_at,
         } => {
             model.geo_last_updated = last_updated;
+            model.geo_last_checked_at = Some(checked_at);
             let mut log_effects = Vec::new();
             for part in &parts {
                 let text = format!("Updated: {}", part);
@@ -580,7 +626,8 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
             }
             log_effects
         }
-        GeoResult::UpToDate => {
+        GeoResult::UpToDate { checked_at } => {
+            model.geo_last_checked_at = checked_at;
             let mut effects = Vec::new();
             push_status(
                 &mut effects,
@@ -606,7 +653,7 @@ fn handle_geo_result(model: &mut Model, result: GeoResult) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::{RoutingMode, SubscriptionAutoUpdate};
+    use crate::config::profile::{GeoAutoUpdate, RoutingMode, SubscriptionAutoUpdate};
     use crate::test_helpers::*;
     use crossterm::event::KeyCode;
 
@@ -1214,7 +1261,10 @@ mod tests {
         model.geo_last_updated = None;
         let effects = update(
             &mut model,
-            Msg::GeoLastUpdated(Some("2026-06-15 08:00".to_string())),
+            Msg::GeoMetadataRefreshed {
+                last_updated: Some("2026-06-15 08:00".to_string()),
+                last_checked_at: None,
+            },
         );
         assert_eq!(model.geo_last_updated, Some("2026-06-15 08:00".to_string()));
         assert_eq!(effects, vec![Effect::BroadcastState]);
@@ -1244,6 +1294,7 @@ mod tests {
             Msg::GeoUpdated(GeoResult::Updated {
                 parts: vec!["geoip".into()],
                 last_updated: Some("2026-05-31 13:41".to_string()),
+                checked_at: Local::now(),
             }),
         );
         assert!(!model.geo_updating);
@@ -1261,7 +1312,12 @@ mod tests {
     fn geo_result_up_to_date_broadcasts_state() {
         let mut model = model_with_profiles(vec![]);
         model.geo_updating = true;
-        let effects = update(&mut model, Msg::GeoUpdated(GeoResult::UpToDate));
+        let effects = update(
+            &mut model,
+            Msg::GeoUpdated(GeoResult::UpToDate {
+                checked_at: Some(Local::now()),
+            }),
+        );
         assert!(!model.geo_updating);
         assert_eq!(
             effects,
@@ -1285,6 +1341,74 @@ mod tests {
             effects,
             vec![app_log_error("net fail"), Effect::BroadcastState]
         );
+    }
+
+    #[test]
+    fn geo_auto_update_due_without_previous_check() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_routing.set_region(GeoRegion::Ru);
+        model.config.settings.geo_routing.auto_update = GeoAutoUpdate::Every12h;
+
+        let effects = handle_tick(&mut model);
+
+        assert!(effects.contains(&Effect::DownloadGeo));
+        assert!(model.geo_updating);
+        assert!(model.geo_last_attempt_at.is_some());
+    }
+
+    #[test]
+    fn geo_auto_update_respects_interval_and_retries_after_interval() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_routing.set_region(GeoRegion::Ru);
+        model.config.settings.geo_routing.auto_update = GeoAutoUpdate::Every1d;
+        let now = Local::now();
+        model.geo_last_checked_at = Some(now - chrono::Duration::try_hours(23).unwrap());
+        assert!(!geo_update_due(&model, now));
+
+        model.geo_last_checked_at = Some(now - chrono::Duration::try_hours(25).unwrap());
+        assert!(geo_update_due(&model, now));
+
+        model.geo_last_attempt_at = Some(now - chrono::Duration::try_hours(1).unwrap());
+        assert!(!geo_update_due(&model, now));
+        model.geo_last_attempt_at = Some(now - chrono::Duration::try_hours(25).unwrap());
+        assert!(geo_update_due(&model, now));
+    }
+
+    #[test]
+    fn geo_auto_update_skips_off_global_and_in_flight() {
+        let mut model = model_with_profiles(vec![]);
+        let now = Local::now();
+        model.config.settings.geo_routing.set_region(GeoRegion::Ru);
+        assert!(!geo_update_due(&model, now));
+
+        model.config.settings.geo_routing.auto_update = GeoAutoUpdate::Every12h;
+        model
+            .config
+            .settings
+            .geo_routing
+            .set_region(GeoRegion::Global);
+        assert!(!geo_update_due(&model, now));
+
+        model.config.settings.geo_routing.set_region(GeoRegion::Ru);
+        model.geo_updating = true;
+        assert!(!geo_update_due(&model, now));
+    }
+
+    #[test]
+    fn shift_i_cycles_geo_auto_update_and_saves() {
+        let mut model = model_with_profiles(vec![]);
+        for expected in [
+            GeoAutoUpdate::Every12h,
+            GeoAutoUpdate::Every1d,
+            GeoAutoUpdate::Every3d,
+            GeoAutoUpdate::Every7d,
+            GeoAutoUpdate::Off,
+        ] {
+            let effects = handle_sources(&mut model, key('I'));
+            assert_eq!(model.config.settings.geo_routing.auto_update, expected);
+            assert!(effects.contains(&Effect::SaveConfig));
+            assert!(model.status.text().contains(expected.label()));
+        }
     }
 
     #[test]

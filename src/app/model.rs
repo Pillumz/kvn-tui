@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::config::profile::{Config, DnsStrategy, GeoRegion, Profile};
 use crate::config::{load_config, save_config};
 use crate::ui::styles::Theme;
+use chrono::{DateTime, Local};
 
 /// UI overlay shown on top of the main screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -160,6 +161,11 @@ pub struct Model {
     pub needs_redraw: bool,
     pub should_quit: bool,
     pub geo_last_updated: Option<String>,
+    /// Last successful remote check for the active geo region.
+    pub geo_last_checked_at: Option<DateTime<Local>>,
+    /// Last check attempt in this daemon session. Prevents an overdue failed
+    /// check from being retried on every 250 ms tick.
+    pub geo_last_attempt_at: Option<DateTime<Local>>,
     /// Latest traffic stats sample, applied either by the daemon (after a
     /// Clash-API fetch) or by the TUI client (from a `StateSnapshot`).
     pub traffic: TrafficStats,
@@ -274,9 +280,9 @@ impl Model {
             .geo_routing
             .current_region
             .unwrap_or(GeoRegion::Global);
-        let geo_last_updated = crate::geo::GeoManager::new()
-            .ok()
-            .and_then(|g| g.last_updated(region));
+        let geo_manager = crate::geo::GeoManager::new().ok();
+        let geo_last_updated = geo_manager.as_ref().and_then(|g| g.last_updated(region));
+        let geo_last_checked_at = geo_manager.and_then(|g| g.last_checked_at(region));
 
         let mut model = Self {
             overlay: Overlay::None,
@@ -298,6 +304,8 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
+            geo_last_checked_at,
+            geo_last_attempt_at: None,
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,
@@ -336,9 +344,9 @@ impl Model {
             .geo_routing
             .current_region
             .unwrap_or(GeoRegion::Global);
-        let geo_last_updated = crate::geo::GeoManager::new()
-            .ok()
-            .and_then(|g| g.last_updated(region));
+        let geo_manager = crate::geo::GeoManager::new().ok();
+        let geo_last_updated = geo_manager.as_ref().and_then(|g| g.last_updated(region));
+        let geo_last_checked_at = geo_manager.and_then(|g| g.last_checked_at(region));
 
         let mut model = Self {
             overlay: Overlay::None,
@@ -360,6 +368,8 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated,
+            geo_last_checked_at,
+            geo_last_attempt_at: None,
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,
@@ -553,6 +563,8 @@ impl Model {
             needs_redraw: false,
             should_quit: false,
             geo_last_updated: None,
+            geo_last_checked_at: None,
+            geo_last_attempt_at: None,
             traffic: TrafficStats::default(),
             last_traffic_sample_at_ms: 0,
             last_traffic_fetch_at: None,

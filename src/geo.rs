@@ -79,6 +79,9 @@ struct GeoMetadata {
     etags: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     updated_at: HashMap<GeoRegion, DateTime<Local>>,
+    /// Last successful HTTP check, including checks that found no changes.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    checked_at: HashMap<GeoRegion, DateTime<Local>>,
 }
 
 /// Deserialization shape that also accepts the legacy per-country etag fields
@@ -89,6 +92,8 @@ struct GeoMetadataRaw {
     etags: HashMap<String, String>,
     #[serde(default)]
     updated_at: HashMap<GeoRegion, DateTime<Local>>,
+    #[serde(default)]
+    checked_at: HashMap<GeoRegion, DateTime<Local>>,
     #[serde(default)]
     geoip_ru_etag: Option<String>,
     #[serde(default)]
@@ -120,6 +125,7 @@ impl From<GeoMetadataRaw> for GeoMetadata {
         GeoMetadata {
             etags,
             updated_at: raw.updated_at,
+            checked_at: raw.checked_at,
         }
     }
 }
@@ -184,6 +190,14 @@ impl GeoManager {
             .map(|dt| dt.format("%d %b %H:%M").to_string())
     }
 
+    /// Return the last successful update check for a region.
+    pub fn last_checked_at(&self, region: GeoRegion) -> Option<DateTime<Local>> {
+        if matches!(region, GeoRegion::Global) {
+            return None;
+        }
+        self.load_metadata().ok()?.checked_at.get(&region).copied()
+    }
+
     /// Check whether rule-sets have updates available for the given region.
     /// Returns `(geoip_has_update, geosite_has_update)`. For `Global`, both
     /// are `false`.
@@ -221,7 +235,9 @@ impl GeoManager {
                 meta.etags.insert(asset.filename.to_string(), e);
             }
         }
-        meta.updated_at.insert(region, Local::now());
+        let now = Local::now();
+        meta.updated_at.insert(region, now);
+        meta.checked_at.insert(region, now);
         self.save_metadata(&meta)?;
         Ok(true)
     }
@@ -230,13 +246,19 @@ impl GeoManager {
     /// Returns typed result describing what happened.
     pub fn update_if_needed(&self, region: GeoRegion) -> Result<GeoResult> {
         if matches!(region, GeoRegion::Global) {
-            return Ok(GeoResult::UpToDate);
+            return Ok(GeoResult::UpToDate { checked_at: None });
         }
 
         let (geoip_need, geosite_need) = self.check_update_available(region)?;
 
         if !geoip_need && !geosite_need {
-            return Ok(GeoResult::UpToDate);
+            let checked_at = Local::now();
+            let mut meta = self.load_metadata().unwrap_or_default();
+            meta.checked_at.insert(region, checked_at);
+            self.save_metadata(&meta)?;
+            return Ok(GeoResult::UpToDate {
+                checked_at: Some(checked_at),
+            });
         }
 
         let updated = self.download_databases(region)?;
@@ -252,9 +274,12 @@ impl GeoManager {
             Ok(GeoResult::Updated {
                 parts,
                 last_updated,
+                checked_at: self.last_checked_at(region).unwrap_or_else(Local::now),
             })
         } else {
-            Ok(GeoResult::UpToDate)
+            Ok(GeoResult::UpToDate {
+                checked_at: Some(Local::now()),
+            })
         }
     }
 
@@ -395,7 +420,11 @@ mod tests {
             );
             updated_at.insert(region, now);
         }
-        let meta = GeoMetadata { etags, updated_at };
+        let meta = GeoMetadata {
+            etags,
+            updated_at,
+            checked_at: HashMap::new(),
+        };
         gm.save_metadata(&meta).unwrap();
         let loaded = gm.load_metadata().unwrap();
         for region in RULE_REGIONS {
@@ -410,6 +439,26 @@ mod tests {
             );
             assert!(loaded.updated_at.contains_key(&region));
         }
+        assert!(loaded.checked_at.is_empty());
+    }
+
+    #[test]
+    fn checked_at_roundtrips_per_region() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let ru_checked = Local::now() - chrono::Duration::try_hours(2).unwrap();
+        let cn_checked = Local::now();
+        let mut meta = GeoMetadata::default();
+        meta.checked_at.insert(GeoRegion::Ru, ru_checked);
+        meta.checked_at.insert(GeoRegion::Cn, cn_checked);
+        gm.save_metadata(&meta).unwrap();
+
+        assert_eq!(gm.last_checked_at(GeoRegion::Ru), Some(ru_checked));
+        assert_eq!(gm.last_checked_at(GeoRegion::Cn), Some(cn_checked));
+        assert_eq!(gm.last_checked_at(GeoRegion::Ir), None);
+        assert_eq!(gm.last_checked_at(GeoRegion::Global), None);
     }
 
     #[test]
@@ -479,6 +528,7 @@ mod tests {
         let meta = gm.load_metadata().unwrap();
         assert!(meta.etags.is_empty());
         assert!(meta.updated_at.is_empty());
+        assert!(meta.checked_at.is_empty());
     }
 
     #[test]
@@ -607,7 +657,7 @@ mod tests {
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
         let gm = GeoManager::new().unwrap();
         let result = gm.update_if_needed(GeoRegion::Global).unwrap();
-        assert!(matches!(result, GeoResult::UpToDate));
+        assert!(matches!(result, GeoResult::UpToDate { .. }));
     }
 
     #[test]
@@ -642,7 +692,7 @@ mod tests {
 
         let result = gm.update_if_needed(GeoRegion::Ru).unwrap();
         assert!(
-            matches!(result, GeoResult::UpToDate),
+            matches!(result, GeoResult::UpToDate { .. }),
             "unexpected result: {:?}",
             result
         );

@@ -954,6 +954,74 @@ fn subscription_auto_update_cycles_and_labels() {
     assert_eq!(SubscriptionAutoUpdate::Every1h.label(), "🗘 1h");
 }
 
+#[test]
+fn geo_auto_update_cycles_intervals_and_labels() {
+    let schedules = [
+        (GeoAutoUpdate::Off, 0, "off"),
+        (GeoAutoUpdate::Every12h, 720, "12h"),
+        (GeoAutoUpdate::Every1d, 1_440, "1d"),
+        (GeoAutoUpdate::Every3d, 4_320, "3d"),
+        (GeoAutoUpdate::Every7d, 10_080, "7d"),
+    ];
+    for (schedule, minutes, label) in schedules {
+        assert_eq!(schedule.interval_minutes(), minutes);
+        assert_eq!(schedule.label(), label);
+    }
+    assert_eq!(GeoAutoUpdate::Off.next(), GeoAutoUpdate::Every12h);
+    assert_eq!(GeoAutoUpdate::Every12h.next(), GeoAutoUpdate::Every1d);
+    assert_eq!(GeoAutoUpdate::Every1d.next(), GeoAutoUpdate::Every3d);
+    assert_eq!(GeoAutoUpdate::Every3d.next(), GeoAutoUpdate::Every7d);
+    assert_eq!(GeoAutoUpdate::Every7d.next(), GeoAutoUpdate::Off);
+}
+
+/// Background update schedule for geo rule-sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GeoAutoUpdate {
+    #[default]
+    Off,
+    #[serde(rename = "every_12h")]
+    Every12h,
+    #[serde(rename = "every_1d")]
+    Every1d,
+    #[serde(rename = "every_3d")]
+    Every3d,
+    #[serde(rename = "every_7d")]
+    Every7d,
+}
+
+impl GeoAutoUpdate {
+    pub fn interval_minutes(self) -> u64 {
+        match self {
+            Self::Off => 0,
+            Self::Every12h => 720,
+            Self::Every1d => 1_440,
+            Self::Every3d => 4_320,
+            Self::Every7d => 10_080,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Every12h,
+            Self::Every12h => Self::Every1d,
+            Self::Every1d => Self::Every3d,
+            Self::Every3d => Self::Every7d,
+            Self::Every7d => Self::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Every12h => "12h",
+            Self::Every1d => "1d",
+            Self::Every3d => "3d",
+            Self::Every7d => "7d",
+        }
+    }
+}
+
 /// Geo-region and routing-mode preferences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct GeoRouting {
@@ -961,6 +1029,8 @@ pub struct GeoRouting {
     pub current_region: Option<GeoRegion>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub selected_region_modes: HashMap<GeoRegion, RoutingMode>,
+    #[serde(default)]
+    pub auto_update: GeoAutoUpdate,
 }
 
 impl GeoRouting {
@@ -1441,6 +1511,7 @@ mod tests {
         assert!(s.last_connected_profile.is_none());
         assert!(s.geo_routing.current_region.is_none());
         assert!(s.geo_routing.selected_region_modes.is_empty());
+        assert_eq!(s.geo_routing.auto_update, GeoAutoUpdate::Off);
         assert_eq!(s.geo_routing.mode(), RoutingMode::Global);
         assert_eq!(s.log_level, "info");
     }
@@ -1481,6 +1552,26 @@ mod tests {
         }"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.log_level, "info");
+        assert_eq!(s.geo_routing.auto_update, GeoAutoUpdate::Off);
+    }
+
+    #[test]
+    fn geo_auto_update_serde_values_round_trip() {
+        for schedule in [
+            GeoAutoUpdate::Off,
+            GeoAutoUpdate::Every12h,
+            GeoAutoUpdate::Every1d,
+            GeoAutoUpdate::Every3d,
+            GeoAutoUpdate::Every7d,
+        ] {
+            let json = serde_json::to_string(&schedule).unwrap();
+            let restored: GeoAutoUpdate = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, schedule);
+        }
+        assert_eq!(
+            serde_json::to_string(&GeoAutoUpdate::Every3d).unwrap(),
+            r#""every_3d""#
+        );
     }
 
     #[test]

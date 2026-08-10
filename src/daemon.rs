@@ -175,10 +175,13 @@ fn execute_daemon_effect(
                 .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
             thread::spawn(move || {
-                let last_updated = crate::geo::GeoManager::new()
-                    .ok()
-                    .and_then(|g| g.last_updated(region));
-                let _ = tx.send(Msg::GeoLastUpdated(last_updated));
+                let manager = crate::geo::GeoManager::new().ok();
+                let last_updated = manager.as_ref().and_then(|g| g.last_updated(region));
+                let last_checked_at = manager.and_then(|g| g.last_checked_at(region));
+                let _ = tx.send(Msg::GeoMetadataRefreshed {
+                    last_updated,
+                    last_checked_at,
+                });
             });
         }
         Effect::DownloadGeoIfMissing => {
@@ -194,7 +197,9 @@ fn execute_daemon_effect(
                 let result = match crate::geo::GeoManager::new() {
                     Ok(gm) => {
                         if gm.has_databases(region) {
-                            GeoResult::UpToDate
+                            GeoResult::UpToDate {
+                                checked_at: gm.last_checked_at(region),
+                            }
                         } else {
                             match gm.update_if_needed(region) {
                                 Ok(geo_result) => geo_result,

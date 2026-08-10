@@ -48,7 +48,10 @@ pub enum Msg {
     Tick,
     Resize,
     GeoUpdated(GeoResult),
-    GeoLastUpdated(Option<String>),
+    GeoMetadataRefreshed {
+        last_updated: Option<String>,
+        last_checked_at: Option<chrono::DateTime<chrono::Local>>,
+    },
     SystemResumed,
     Connected {
         pid: u32,
@@ -93,8 +96,11 @@ pub enum GeoResult {
     Updated {
         parts: Vec<String>,
         last_updated: Option<String>,
+        checked_at: chrono::DateTime<chrono::Local>,
     },
-    UpToDate,
+    UpToDate {
+        checked_at: Option<chrono::DateTime<chrono::Local>>,
+    },
     Error(String),
 }
 
