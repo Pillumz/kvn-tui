@@ -107,6 +107,16 @@ when you log in. Enable it once after installation:
 systemctl --user enable --now kvn-tui.service
 ```
 
+#### Upgrading from 0.19.1 or earlier
+
+Run the command above as your regular user after upgrading. If you previously
+enabled daemon autostart through the Omarchy installer, run it again to remove
+the legacy Hyprland autostart entry:
+
+```bash
+kvn-tui --install-omarchy
+```
+
 ### Omarchy Setup
 
 If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
