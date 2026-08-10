@@ -35,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify systemd user unit
+        run: systemd-analyze --user verify contrib/kvn-tui.service
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked
 

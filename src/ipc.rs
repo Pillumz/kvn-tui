@@ -66,7 +66,11 @@ impl IpcServer {
     pub fn bind(tx: Sender<Msg>) -> anyhow::Result<Self> {
         let path = socket_path();
         if path.exists() {
-            std::fs::remove_file(&path).ok();
+            if UnixStream::connect(&path).is_ok() {
+                anyhow::bail!("kvn-tui daemon is already running at {}", path.display());
+            }
+            std::fs::remove_file(&path)
+                .with_context(|| format!("Failed to remove stale socket {}", path.display()))?;
         }
         let listener = UnixListener::bind(&path)?;
         // 0600: any local user knowing the socket path could otherwise send
@@ -335,6 +339,44 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600, "expected 0600, got {:o}", mode);
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn second_server_does_not_replace_live_socket() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        cleanup_socket();
+
+        let (first_tx, _first_rx) = channel::<Msg>();
+        let _first = IpcServer::bind(first_tx).expect("first server bind");
+        let (second_tx, _second_rx) = channel::<Msg>();
+        let err = match IpcServer::bind(second_tx) {
+            Ok(_) => panic!("second server must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("already running"));
+        assert!(UnixStream::connect(socket_path()).is_ok());
+
+        cleanup_socket();
+        unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };
+    }
+
+    #[test]
+    fn server_replaces_stale_socket() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", tmp.path()) };
+        std::fs::write(socket_path(), b"stale").unwrap();
+
+        let (server_tx, _server_rx) = channel::<Msg>();
+        let _server = IpcServer::bind(server_tx).expect("replace stale socket");
+
+        assert!(UnixStream::connect(socket_path()).is_ok());
 
         cleanup_socket();
         unsafe { std::env::remove_var("XDG_RUNTIME_DIR") };

@@ -98,6 +98,15 @@ Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the follow
 yay -S kvn-tui-bin
 ```
 
+### Daemon autostart
+
+The package includes a systemd user service that starts the headless daemon
+when you log in. Enable it once after installation:
+
+```bash
+systemctl --user enable --now kvn-tui.service
+```
+
 ### Omarchy Setup
 
 If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
@@ -110,7 +119,6 @@ This automatically:
 
 - Installs the `omarchy-launch-kvn-tui` launcher script to `~/.local/bin/`
 - Adds a `custom/kvn-tui` module to Waybar (shows connected/disconnected status, clicks open the TUI)
-- Optionally adds the kvn-tui **daemon** to Hyprland autostart (`~/.config/hypr/autostart.conf`) — runs headlessly on login
 - Optionally adds a Hyprland keybinding to open the TUI (default: `Super + Ctrl + K`)
 - Configures the TUI window to open centered and floating
 - Backs up your Waybar and Hyprland configs before modifying them
@@ -118,7 +126,9 @@ This automatically:
 
 > The installer is idempotent — running it again will skip already-applied changes.
 
-After installation, the daemon starts automatically on login. Open the TUI on demand via the Waybar module, the keybinding, or by running `omarchy-launch-kvn-tui`.
+After enabling the systemd user service above, the daemon starts automatically
+on login. Open the TUI on demand via the Waybar module, the keybinding, or by
+running `omarchy-launch-kvn-tui`.
 
 ### Polkit Setup (recommended)
 
@@ -208,6 +218,13 @@ sing-box version
 cargo build --release
 sudo install -Dm755 target/release/kvn-tui /usr/local/bin/kvn-tui
 ```
+
+The bundled user unit assumes the packaged `/usr/bin/kvn-tui` path. For a
+manual `/usr/local/bin` installation, either keep the TUI's automatic detached
+daemon fallback or copy `contrib/kvn-tui.service` into
+`~/.config/systemd/user/`, change `ExecStart` to point to the
+`/usr/local/bin/kvn-tui --daemon` command, then enable it with
+`systemctl --user enable --now kvn-tui.service`.
 
 ---
 

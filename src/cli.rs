@@ -11,7 +11,7 @@ pub struct Cli {
 
     #[arg(
         long,
-        help = "Install Omarchy integration (Waybar module and desktop entry for Walker)"
+        help = "Install Omarchy integration (Waybar module, launcher, and Hyprland keybinding)"
     )]
     install_omarchy: bool,
 

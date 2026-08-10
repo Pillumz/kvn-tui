@@ -58,7 +58,7 @@ fn main() -> Result<()> {
         daemon::run(model)?;
     } else {
         if !ipc::is_daemon_running() {
-            spawn_daemon_process()?;
+            start_daemon()?;
             if !ipc::wait_for_daemon(std::time::Duration::from_millis(2000)) {
                 anyhow::bail!("daemon failed to start within 2s");
             }
@@ -85,12 +85,28 @@ fn resolve_log_filter(level: &str) -> (EnvFilter, Option<String>) {
     }
 }
 
+/// Start the packaged systemd user service when available. Source builds and
+/// manual installations may not have the unit, so retain the detached-process
+/// fallback that lets the TUI remain self-contained.
+fn start_daemon() -> Result<()> {
+    use std::process::{Command, Stdio};
+
+    let systemd_status = Command::new("systemctl")
+        .args(["--user", "start", "kvn-tui.service"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    if matches!(systemd_status, Ok(status) if status.success()) {
+        return Ok(());
+    }
+
+    spawn_daemon_process()
+}
+
 /// Re-exec ourselves as `kvn-tui --daemon` in a fresh process group so the
-/// daemon outlives the TUI. The previous implementation spawned the daemon
-/// as a thread inside the TUI process — once the user pressed `q`, the
-/// process exited and took the daemon (and sing-box) with it. In the normal
-/// flow this is dead code (the hyprland autostart already runs `--daemon`),
-/// but it matters when that autostart hasn't fired yet.
+/// daemon outlives the TUI when no packaged systemd unit is available.
 fn spawn_daemon_process() -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};

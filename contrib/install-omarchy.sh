@@ -102,24 +102,10 @@ else
   echo "Launcher script already present."
 fi
 
-# ── Hyprland autostart (daemon) ──
-autostart_already=false
-
-if [ -f "$HYPR_AUTOSTART" ] && grep -q "kvn-tui --daemon" "$HYPR_AUTOSTART"; then
-  autostart_already=true
-  echo "Hyprland autostart already configured."
-fi
-
-if [ "$autostart_already" = false ]; then
-  echo
-  read -r -p "Enable kvn-tui daemon autostart on login? [y/N] " autostart_answer
-  if [[ "$autostart_answer" =~ ^[Yy]$ ]]; then
-    echo "Adding kvn-tui daemon to hyprland autostart..."
-    mkdir -p "$(dirname "$HYPR_AUTOSTART")"
-    printf '\n%s\n' "exec-once = kvn-tui --daemon" >> "$HYPR_AUTOSTART"
-  else
-    echo "Skipping autostart."
-  fi
+# ── Migrate legacy Hyprland daemon autostart ──
+if [ -f "$HYPR_AUTOSTART" ] && grep -qE '^[[:space:]]*exec-once[[:space:]]*=[[:space:]]*kvn-tui --daemon[[:space:]]*$' "$HYPR_AUTOSTART"; then
+  echo "Removing legacy kvn-tui daemon entry from Hyprland autostart..."
+  sed -i '/^[[:space:]]*exec-once[[:space:]]*=[[:space:]]*kvn-tui --daemon[[:space:]]*$/d' "$HYPR_AUTOSTART"
 fi
 
 # ── Hyprland keybinding ──
