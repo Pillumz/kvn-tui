@@ -22,6 +22,7 @@
 - [Installation (Arch Linux)](#installation-arch-linux)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
+- [Upgrading to v0.20.0](#upgrading-to-v0200)
 
 ---
 
@@ -105,16 +106,6 @@ when you log in. Enable it once after installation:
 
 ```bash
 systemctl --user enable --now kvn-tui.service
-```
-
-#### Upgrading from 0.19.1 or earlier
-
-Run the command above as your regular user after upgrading. If you previously
-enabled daemon autostart through the Omarchy installer, run it again to remove
-the legacy Hyprland autostart entry:
-
-```bash
-kvn-tui --install-omarchy
 ```
 
 ### Omarchy Setup
@@ -351,6 +342,37 @@ Logs are split across two files in:
 
 - `sing-box.log` — raw sing-box stdout/stderr (the live log pane tails this file)
 - `app.log` — daemon and TUI client status messages, errors, and lifecycle events
+
+---
+
+## Upgrading to v0.20.0
+
+Starting with v0.20.0, the kvn-tui daemon is started by a systemd user service
+instead of Hyprland autostart. Upgrading the package installs the service but
+does not enable it automatically. If you are upgrading from v0.19.1 or earlier:
+
+1. If the old daemon is currently running, open `kvn-tui` and press `Ctrl+C` to
+   stop it. This also disconnects the active VPN connection.
+2. If you previously ran `kvn-tui --install-omarchy`, run it again to remove
+   the legacy daemon entry from Hyprland autostart. Skip this step on
+   non-Omarchy systems.
+3. Enable and start the service as your regular user, without `sudo`:
+
+   ```bash
+   systemctl --user enable --now kvn-tui.service
+   ```
+
+4. Confirm that the daemon is running:
+
+   ```bash
+   systemctl --user is-active kvn-tui.service
+   ```
+
+   The command should print `active`.
+
+The daemon will now start whenever you log in, independently of Hyprland. If
+`auto_connect` is enabled, kvn-tui reconnects the last profile automatically;
+otherwise, open the TUI and connect manually.
 
 ---
 
