@@ -383,6 +383,41 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = env::var_os(key);
+            unsafe { env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = env::var_os(key);
+            unsafe { env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { env::set_var(self.key, value) },
+                None => unsafe { env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn executable(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     #[test]
     fn parses_release_and_prerelease_versions() {
         assert_eq!(parse_version("sing-box version 1.13.15"), Some((1, 13, 15)));
@@ -434,5 +469,196 @@ mod tests {
     #[test]
     fn rejects_malformed_proc_stat() {
         assert_eq!(proc_start_time("not proc stat"), None);
+    }
+
+    #[test]
+    fn singbox_version_check_covers_success_and_failures() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let current = executable(dir.path(), "current", "echo 'sing-box version 1.13.2'");
+        assert_eq!(check_singbox_version(&current).level, Level::Pass);
+
+        let old = executable(dir.path(), "old", "echo 'sing-box version 1.11.9'");
+        assert_eq!(check_singbox_version(&old).level, Level::Failure);
+
+        let unknown = executable(dir.path(), "unknown", "echo 'development build'");
+        assert_eq!(check_singbox_version(&unknown).level, Level::Failure);
+
+        let failing = executable(dir.path(), "failing", "exit 7");
+        assert_eq!(check_singbox_version(&failing).level, Level::Failure);
+
+        assert_eq!(
+            check_singbox_version(&dir.path().join("missing")).level,
+            Level::Failure
+        );
+    }
+
+    #[test]
+    fn path_and_singbox_resolution_use_environment() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let binary = executable(dir.path(), "sing-box", "exit 0");
+        let _path = EnvGuard::set("PATH", dir.path());
+        let _override = EnvGuard::remove("SING_BOX_PATH");
+        assert_eq!(find_on_path("sing-box"), Some(binary.clone()));
+        assert_eq!(find_singbox(), Some(binary.clone()));
+
+        let _override = EnvGuard::set("SING_BOX_PATH", &binary);
+        assert_eq!(find_singbox(), Some(binary));
+    }
+
+    #[test]
+    fn capability_check_classifies_getcap_output() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let binary = executable(dir.path(), "sing-box", "exit 0");
+
+        executable(
+            dir.path(),
+            "getcap",
+            "echo \"$1 cap_net_admin,cap_net_raw=ep\"",
+        );
+        let _path = EnvGuard::set("PATH", dir.path());
+        assert_eq!(check_capabilities(&binary).level, Level::Pass);
+
+        executable(dir.path(), "getcap", "exit 0");
+        assert_eq!(check_capabilities(&binary).level, Level::Failure);
+    }
+
+    #[test]
+    fn capability_check_warns_when_getcap_is_missing() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let binary = executable(dir.path(), "sing-box", "exit 0");
+        let empty = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", empty.path());
+        assert_eq!(check_capabilities(&binary).level, Level::Warning);
+    }
+
+    #[test]
+    fn config_check_accepts_missing_and_valid_files_and_rejects_invalid_json() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _xdg = EnvGuard::set("XDG_CONFIG_HOME", dir.path());
+
+        assert_eq!(check_config().level, Level::Pass);
+        let path = crate::paths::profiles_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+        assert_eq!(check_config().level, Level::Pass);
+        std::fs::write(path, "not json").unwrap();
+        assert_eq!(check_config().level, Level::Failure);
+    }
+
+    #[test]
+    fn systemd_check_classifies_enabled_disabled_and_errors() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", dir.path());
+
+        executable(dir.path(), "systemctl", "echo enabled");
+        assert_eq!(systemctl_user_is_enabled(), Some(true));
+        executable(dir.path(), "systemctl", "echo disabled; exit 1");
+        assert_eq!(systemctl_user_is_enabled(), Some(false));
+        executable(dir.path(), "systemctl", "echo error >&2; exit 1");
+        assert_eq!(systemctl_user_is_enabled(), None);
+    }
+
+    #[test]
+    fn clipboard_check_detects_backends_and_missing_tools() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", dir.path());
+        let _wayland = EnvGuard::set("WAYLAND_DISPLAY", "wayland-1");
+        let _session = EnvGuard::remove("XDG_SESSION_TYPE");
+
+        assert_eq!(check_clipboard().level, Level::Warning);
+        executable(dir.path(), "wl-paste", "exit 0");
+        executable(dir.path(), "wl-copy", "exit 0");
+        assert_eq!(check_clipboard().level, Level::Pass);
+    }
+
+    #[test]
+    fn polkit_check_classifies_authorized_denied_and_errors() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", dir.path());
+
+        executable(dir.path(), "pkcheck", "exit 0");
+        assert_eq!(check_polkit().level, Level::Pass);
+        executable(dir.path(), "pkcheck", "exit 2");
+        assert_eq!(check_polkit().level, Level::Optional);
+        executable(dir.path(), "pkcheck", "echo unavailable >&2; exit 127");
+        assert_eq!(check_polkit().level, Level::Warning);
+    }
+
+    #[test]
+    fn polkit_check_warns_when_pkcheck_is_missing() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let _path = EnvGuard::set("PATH", dir.path());
+        assert_eq!(check_polkit().level, Level::Warning);
+    }
+
+    #[test]
+    fn report_helpers_cover_all_levels() {
+        let checks = [
+            Check::pass("ready"),
+            Check::warning("warning", "fix"),
+            Check::failure("failure", "fix"),
+            Check::optional("optional"),
+        ];
+        print_report(&checks);
+        assert_eq!(
+            checks.iter().filter(|c| c.level == Level::Failure).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn process_identity_has_three_numeric_fields() {
+        let identity = polkit_process_identity().unwrap();
+        let fields: Vec<_> = identity.split(',').collect();
+        assert_eq!(fields.len(), 3);
+        assert!(fields.iter().all(|field| field.parse::<u64>().is_ok()));
+    }
+
+    #[test]
+    fn full_doctor_run_succeeds_with_required_dependencies() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        executable(bin.path(), "sing-box", "echo 'sing-box version 1.13.2'");
+        executable(
+            bin.path(),
+            "getcap",
+            "echo \"$1 cap_net_admin,cap_net_raw=ep\"",
+        );
+        executable(bin.path(), "systemctl", "echo disabled; exit 1");
+        executable(bin.path(), "pkcheck", "exit 0");
+        executable(bin.path(), "wl-paste", "exit 0");
+        executable(bin.path(), "wl-copy", "exit 0");
+
+        let _path = EnvGuard::set("PATH", bin.path());
+        let _override = EnvGuard::remove("SING_BOX_PATH");
+        let _xdg = EnvGuard::set("XDG_CONFIG_HOME", config.path());
+        let _wayland = EnvGuard::set("WAYLAND_DISPLAY", "wayland-test");
+        assert!(run().is_ok());
+    }
+
+    #[test]
+    fn full_doctor_run_fails_without_singbox() {
+        let _lock = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        executable(bin.path(), "systemctl", "echo disabled; exit 1");
+        executable(bin.path(), "pkcheck", "exit 2");
+
+        let _path = EnvGuard::set("PATH", bin.path());
+        let _override = EnvGuard::remove("SING_BOX_PATH");
+        let _xdg = EnvGuard::set("XDG_CONFIG_HOME", config.path());
+        let _wayland = EnvGuard::remove("WAYLAND_DISPLAY");
+        let _session = EnvGuard::remove("XDG_SESSION_TYPE");
+        assert!(run().is_err());
     }
 }
