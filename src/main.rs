@@ -9,6 +9,7 @@ mod atomic_write;
 mod cli;
 mod config;
 mod daemon;
+mod doctor;
 mod geo;
 mod ipc;
 mod omarchy;

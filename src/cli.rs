@@ -1,11 +1,14 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::services::waybar;
 
 #[derive(Parser)]
 #[command(version, about)]
 pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(long, help = "Print connection status as JSON for Waybar integration")]
     waybar_status: bool,
 
@@ -29,6 +32,12 @@ pub struct Cli {
 
     #[arg(long, help = "Run the headless daemon that manages sing-box")]
     pub daemon: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Check whether kvn-tui and its runtime dependencies are ready.
+    Doctor,
 }
 
 /// Run the embedded Omarchy integration installer script.
@@ -88,6 +97,9 @@ pub fn try_run() -> Option<Result<()>> {
 
 /// Same as `try_run` but takes an already-parsed `Cli`.
 pub fn try_run_from_parsed(cli: &Cli) -> Option<Result<()>> {
+    if matches!(cli.command, Some(Command::Doctor)) {
+        return Some(crate::doctor::run());
+    }
     if cli.install_omarchy {
         return Some(install_omarchy());
     }
@@ -144,5 +156,11 @@ mod tests {
     fn daemon_flag_detected() {
         let cli = Cli::parse_from(["kvn-tui", "--daemon"]);
         assert!(cli.daemon);
+    }
+
+    #[test]
+    fn doctor_subcommand_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "doctor"]);
+        assert!(matches!(cli.command, Some(Command::Doctor)));
     }
 }
