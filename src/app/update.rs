@@ -330,6 +330,13 @@ fn geo_update_due(model: &Model, now: chrono::DateTime<Local>) -> bool {
     if model.geo_updating {
         return false;
     }
+    // With the kill switch active, ordinary application traffic cannot leave
+    // through the physical interface. Wait for sing-box to bring up the TUN
+    // before starting the HTTP check; otherwise startup auto-connect and the
+    // geo download race each other and the request is dropped by nftables.
+    if model.config.settings.kill_switch && model.connection != ConnectionState::Connected {
+        return false;
+    }
     let Some(region) = model.config.settings.geo_routing.current_region else {
         return false;
     };
@@ -355,6 +362,12 @@ fn geo_update_due(model: &Model, now: chrono::DateTime<Local>) -> bool {
 }
 
 fn check_due_subscriptions(model: &mut Model) -> Vec<Effect> {
+    // Subscription fetches use ordinary application networking, so with the
+    // kill switch active they must wait until sing-box has created the TUN.
+    if model.config.settings.kill_switch && model.connection != ConnectionState::Connected {
+        return Vec::new();
+    }
+
     let mut effects = Vec::new();
     let now = Local::now();
     for sub in &model.config.subscriptions {
@@ -1375,6 +1388,24 @@ mod tests {
     }
 
     #[test]
+    fn geo_auto_update_waits_for_vpn_when_kill_switch_is_enabled() {
+        let mut model = model_with_profiles(vec![]);
+        model.config.settings.geo_routing.set_region(GeoRegion::Ru);
+        model.config.settings.geo_routing.auto_update = GeoAutoUpdate::Every1d;
+        model.config.settings.kill_switch = true;
+        let now = Local::now();
+
+        model.connection = ConnectionState::Connecting;
+        assert!(!geo_update_due(&model, now));
+
+        model.connection = ConnectionState::ConnectPending;
+        assert!(!geo_update_due(&model, now));
+
+        model.connection = ConnectionState::Connected;
+        assert!(geo_update_due(&model, now));
+    }
+
+    #[test]
     fn geo_auto_update_skips_off_global_and_in_flight() {
         let mut model = model_with_profiles(vec![]);
         let now = Local::now();
@@ -2209,6 +2240,35 @@ mod tests {
         let effects = check_due_subscriptions(&mut model);
 
         assert_eq!(effects, vec![Effect::UpdateSubscription { id: sub_id }]);
+        assert!(model.subscription_updates.contains(&sub_id));
+    }
+
+    #[test]
+    fn subscription_auto_update_waits_for_vpn_when_kill_switch_is_enabled() {
+        let sub_id = Uuid::new_v4();
+        let mut model = model_with_profiles(vec![]);
+        model.config.subscriptions.push(Subscription {
+            id: sub_id,
+            name: "Sub".to_string(),
+            url: "http://example.com/sub".to_string(),
+            auto_update: SubscriptionAutoUpdate::Every1h,
+            last_updated: None,
+        });
+        model.config.settings.kill_switch = true;
+
+        model.connection = ConnectionState::Connecting;
+        assert!(check_due_subscriptions(&mut model).is_empty());
+        assert!(!model.subscription_updates.contains(&sub_id));
+
+        model.connection = ConnectionState::ConnectPending;
+        assert!(check_due_subscriptions(&mut model).is_empty());
+        assert!(!model.subscription_updates.contains(&sub_id));
+
+        model.connection = ConnectionState::Connected;
+        assert_eq!(
+            check_due_subscriptions(&mut model),
+            vec![Effect::UpdateSubscription { id: sub_id }]
+        );
         assert!(model.subscription_updates.contains(&sub_id));
     }
 
