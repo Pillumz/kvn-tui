@@ -20,9 +20,9 @@
 - [Installation (Arch Linux)](#installation-arch-linux)
   - [Install from AUR](#install-from-aur-recommended)
   - [Daemon autostart](#daemon-autostart)
-  - [Omarchy setup](#omarchy-setup)
   - [Polkit setup](#polkit-setup-recommended)
   - [Kill switch setup](#kill-switch-setup-optional)
+  - [Omarchy setup](#omarchy-setup-optional)
   - [Build from source](#build--install-from-source)
 - [Diagnostics](#diagnostics)
 - [Quick Start](#quick-start)
@@ -74,29 +74,6 @@ when you log in. Enable it once after installation:
 systemctl --user enable --now kvn-tui.service
 ```
 
-### Omarchy Setup
-
-If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
-
-```bash
-kvn-tui setup --omarchy
-```
-
-This automatically:
-
-- Installs the `omarchy-launch-kvn-tui` launcher script to `~/.local/bin/`
-- Adds a `custom/kvn-tui` module to Waybar (shows connected/disconnected status, clicks open the TUI)
-- Optionally adds a Hyprland keybinding to open the TUI (default: `Super + Ctrl + K`)
-- Configures the TUI window to open centered and floating
-- Backs up your Waybar and Hyprland configs before modifying them
-- Restarts Waybar to apply changes
-
-> The installer is idempotent — running it again will skip already-applied changes.
-
-After enabling the systemd user service above, the daemon starts automatically
-on login. Open the TUI on demand via the Waybar module, the keybinding, or by
-running `omarchy-launch-kvn-tui`.
-
 ### Polkit Setup (recommended)
 
 If your system uses **systemd-resolved** or **NetworkManager**, sing-box may trigger authentication dialogs when it changes DNS settings or routes on connect. To avoid these prompts, install the bundled polkit rule:
@@ -138,6 +115,29 @@ This command will:
 Once installed, press `K` in the TUI to enable or disable the kill switch. The status bar shows `[KS]` when it is active.
 
 > The kill switch is independent from the polkit rule above, but both use the `network` group. Running `setup --polkit` first means `setup --killswitch` will skip the group-add step. Both can also be set up at once with `sudo kvn-tui setup --polkit --killswitch`.
+
+### Omarchy Setup (optional)
+
+If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
+
+```bash
+kvn-tui setup --omarchy
+```
+
+This automatically:
+
+- Installs the `omarchy-launch-kvn-tui` launcher script to `~/.local/bin/`
+- Adds a `custom/kvn-tui` module to Waybar (shows connected/disconnected status, clicks open the TUI)
+- Optionally adds a Hyprland keybinding to open the TUI (default: `Super + Ctrl + K`)
+- Configures the TUI window to open centered and floating
+- Backs up your Waybar and Hyprland configs before modifying them
+- Restarts Waybar to apply changes
+
+> The installer is idempotent — running it again will skip already-applied changes.
+
+After enabling the systemd user service above, the daemon starts automatically
+on login. Open the TUI on demand via the Waybar module, the keybinding, or by
+running `omarchy-launch-kvn-tui`.
 
 ### Build & Install from Source
 
