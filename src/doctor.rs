@@ -320,7 +320,7 @@ fn check_polkit() -> Check {
     let Some(identity) = polkit_process_identity() else {
         return Check::warning(
             "polkit authorization could not be checked",
-            "Run `kvn-tui doctor` again or inspect polkit with `sudo kvn-tui --install-polkit`.",
+            "Run `kvn-tui doctor` again or inspect polkit with `sudo kvn-tui setup --polkit`.",
         );
     };
     let output = Command::new("pkcheck")

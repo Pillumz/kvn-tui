@@ -78,7 +78,7 @@ systemctl --user enable --now kvn-tui.service
 If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
 
 ```bash
-kvn-tui --install-omarchy
+kvn-tui setup --omarchy
 ```
 
 This automatically:
@@ -101,7 +101,7 @@ running `omarchy-launch-kvn-tui`.
 If your system uses **systemd-resolved** or **NetworkManager**, sing-box may trigger authentication dialogs when it changes DNS settings or routes on connect. To avoid these prompts, install the bundled polkit rule:
 
 ```bash
-sudo kvn-tui --install-polkit
+sudo kvn-tui setup --polkit
 ```
 
 This command will:
@@ -119,7 +119,7 @@ If you prefer not to use polkit, you can simply authenticate when the dialog app
 The kill switch blocks all outbound traffic when the VPN connection is not active. To use it, install the bundled helper:
 
 ```bash
-sudo kvn-tui --install-killswitch
+sudo kvn-tui setup --killswitch
 ```
 
 This command will:
@@ -136,7 +136,7 @@ This command will:
 
 Once installed, press `K` in the TUI to enable or disable the kill switch. The status bar shows `[KS]` when it is active.
 
-> The kill switch is independent from the polkit rule above, but both use the `network` group. Running `--install-polkit` first means `--install-killswitch` will skip the group-add step.
+> The kill switch is independent from the polkit rule above, but both use the `network` group. Running `setup --polkit` first means `setup --killswitch` will skip the group-add step. Both can also be set up at once with `sudo kvn-tui setup --polkit --killswitch`.
 
 ### Build & Install from Source
 

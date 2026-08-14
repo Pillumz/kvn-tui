@@ -16,7 +16,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 
 | Module | Path | Responsibility |
 |--------|------|----------------|
-| `cli` | `src/cli.rs` | CLI argument parsing (`--waybar-status`, `--install-omarchy`, `--version`) |
+| `cli` | `src/cli.rs` | CLI argument parsing (`--waybar-status`, `setup --omarchy`, `--version`) |
 | `app` | `src/app.rs`, `src/app/model.rs`, `src/app/msg.rs`, `src/app/update.rs`, `src/app/effect.rs` | TEA core: Model, Msg, Update, Effect — pure data, messages, business logic, side-effect declarations |
 | `model` | `src/app/model.rs` | Application state (`Model`), overlay + connection state + subscription state, input state — pure data, no side effects |
 | `msg` | `src/app/msg.rs` | Message enum (`Msg`) — all external events (keys, ticks, logs, geo, resume, etc.) |
@@ -64,7 +64,7 @@ Run (no root required when sing-box has capabilities):
 Install polkit rule (avoids authentication dialogs on connect):
 
 ```bash
-sudo ./target/release/kvn-tui --install-polkit
+sudo ./target/release/kvn-tui setup --polkit
 ```
 
 ---
@@ -213,7 +213,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 
 ### Kill Switch
 - Uses **nftables** + a systemd unit (`kvn-tui-killswitch.service`) that loads `/etc/kvn-tui/killswitch.nft`. The ruleset drops all outbound traffic except localhost, `tun*` interfaces, and packets marked `0x29a` by sing-box.
-- Privilege escalation via **sudoers NOPASSWD** (not polkit) — grants the `network` group passwordless access to `/usr/lib/kvn-tui/killswitch-helper.sh`. Installed with `sudo kvn-tui --install-killswitch`.
+- Privilege escalation via **sudoers NOPASSWD** (not polkit) — grants the `network` group passwordless access to `/usr/lib/kvn-tui/killswitch-helper.sh`. Installed with `sudo kvn-tui setup --killswitch`.
 - **Toggle flow**: `K` keybinding → `Effect::ApplyKillSwitch { enabled }` → daemon spawns thread calling `services::killswitch::apply(enabled)` → sends `Msg::KillSwitchApplied { enabled, error }` back. On success the boolean is flipped and config is saved; on error the boolean is unchanged and the error is shown.
 - **Reconciliation on startup**: daemon queries systemd to check whether the unit is actually active and aligns `settings.kill_switch` with the real state, preventing drift if the unit was manually disabled or the helper was uninstalled.
 - **Handshake window**: before spawning `sing-box run`, the daemon pre-resolves the VPN endpoint's IP addresses via DNS and adds them as temporary nftables exceptions (`allow <ip> tcp <port>`), ensuring the initial TLS/REALITY handshake is not blocked. Every non-`local`, non-`fakeip` DNS upstream from `settings.dns.servers` is also resolved and allowlisted with its protocol-appropriate port (UDP/53, TCP/53, DoT/853, DoH/443, DoQ/853) so sing-box's bootstrap resolver can reach the user-configured DoH/DoT endpoint instead of a hard-coded 1.1.1.1. These exceptions are revoked on disconnect.

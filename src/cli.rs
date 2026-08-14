@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 use crate::services::waybar;
 
@@ -12,24 +12,6 @@ pub struct Cli {
     #[arg(long, help = "Print connection status as JSON for Waybar integration")]
     waybar_status: bool,
 
-    #[arg(
-        long,
-        help = "Install Omarchy integration (Waybar module, launcher, and Hyprland keybinding)"
-    )]
-    install_omarchy: bool,
-
-    #[arg(
-        long,
-        help = "Install polkit rule to allow network group to manage DNS without password prompts"
-    )]
-    install_polkit: bool,
-
-    #[arg(
-        long,
-        help = "Install kill switch: nftables ruleset, systemd unit, helper, and sudoers fragment"
-    )]
-    install_killswitch: bool,
-
     #[arg(long, help = "Run the headless daemon that manages sing-box")]
     pub daemon: bool,
 }
@@ -38,6 +20,27 @@ pub struct Cli {
 enum Command {
     /// Check whether kvn-tui and its runtime dependencies are ready.
     Doctor,
+
+    /// Set up one or more optional kvn-tui integrations.
+    #[command(group(
+        ArgGroup::new("targets")
+            .required(true)
+            .multiple(true)
+            .args(["omarchy", "polkit", "killswitch"])
+    ))]
+    Setup {
+        /// Set up Omarchy integration (Waybar module, launcher, and Hyprland keybinding).
+        #[arg(long)]
+        omarchy: bool,
+
+        /// Set up polkit access for passwordless DNS management.
+        #[arg(long)]
+        polkit: bool,
+
+        /// Set up the nftables-based kill switch.
+        #[arg(long)]
+        killswitch: bool,
+    },
 }
 
 /// Run the embedded Omarchy integration installer script.
@@ -97,17 +100,28 @@ pub fn try_run() -> Option<Result<()>> {
 
 /// Same as `try_run` but takes an already-parsed `Cli`.
 pub fn try_run_from_parsed(cli: &Cli) -> Option<Result<()>> {
-    if matches!(cli.command, Some(Command::Doctor)) {
-        return Some(crate::doctor::run());
-    }
-    if cli.install_omarchy {
-        return Some(install_omarchy());
-    }
-    if cli.install_polkit {
-        return Some(install_polkit());
-    }
-    if cli.install_killswitch {
-        return Some(install_killswitch());
+    match &cli.command {
+        Some(Command::Doctor) => return Some(crate::doctor::run()),
+        Some(Command::Setup {
+            omarchy,
+            polkit,
+            killswitch,
+        }) => {
+            let result = (|| {
+                if *omarchy {
+                    install_omarchy()?;
+                }
+                if *polkit {
+                    install_polkit()?;
+                }
+                if *killswitch {
+                    install_killswitch()?;
+                }
+                Ok(())
+            })();
+            return Some(result);
+        }
+        None => {}
     }
     if cli.waybar_status {
         waybar::print_status();
@@ -135,21 +149,60 @@ mod tests {
     }
 
     #[test]
-    fn install_omarchy_flag_detected() {
-        let cli = Cli::parse_from(["kvn-tui", "--install-omarchy"]);
-        assert!(cli.install_omarchy);
+    fn setup_omarchy_option_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "setup", "--omarchy"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Setup {
+                omarchy: true,
+                polkit: false,
+                killswitch: false,
+            })
+        ));
     }
 
     #[test]
-    fn install_polkit_flag_detected() {
-        let cli = Cli::parse_from(["kvn-tui", "--install-polkit"]);
-        assert!(cli.install_polkit);
+    fn setup_polkit_option_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "setup", "--polkit"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Setup {
+                omarchy: false,
+                polkit: true,
+                killswitch: false,
+            })
+        ));
     }
 
     #[test]
-    fn install_killswitch_flag_detected() {
-        let cli = Cli::parse_from(["kvn-tui", "--install-killswitch"]);
-        assert!(cli.install_killswitch);
+    fn setup_killswitch_option_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "setup", "--killswitch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Setup {
+                omarchy: false,
+                polkit: false,
+                killswitch: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn setup_options_can_be_combined() {
+        let cli = Cli::parse_from(["kvn-tui", "setup", "--omarchy", "--polkit", "--killswitch"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Setup {
+                omarchy: true,
+                polkit: true,
+                killswitch: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn setup_requires_at_least_one_option() {
+        assert!(Cli::try_parse_from(["kvn-tui", "setup"]).is_err());
     }
 
     #[test]
