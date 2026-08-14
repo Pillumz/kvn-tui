@@ -35,8 +35,8 @@ add table inet kvn_tui_killswitch
 delete table inet kvn_tui_killswitch
 table inet kvn_tui_killswitch {
     # Dynamic sets populated by the daemon during the connect handshake.
-    # Type uses `inet_proto`, so matchers must use `ip protocol` / `ip6 nexthdr`,
-    # not `meta l4proto`.
+    # IPv6 uses `meta l4proto` so extension headers are followed to the actual
+    # transport protocol; IPv4's protocol field already identifies it directly.
     set handshake_v4 {
         type ipv4_addr . inet_proto . inet_service
         flags interval
@@ -71,7 +71,7 @@ table inet kvn_tui_killswitch {
         ip6 daddr { fc00::/7, fe80::/10 } accept
         meta l4proto { icmp, icmpv6 } accept
         ip daddr . ip protocol . th dport @handshake_v4 accept
-        ip6 daddr . ip6 nexthdr . th dport @handshake_v6 accept
+        ip6 daddr . meta l4proto . th dport @handshake_v6 accept
         udp sport 68 udp dport 67 accept
         udp sport 546 udp dport 547 accept
     }

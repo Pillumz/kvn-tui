@@ -37,6 +37,11 @@ pub fn run(mut model: Model) -> Result<()> {
             tracing::warn!("Failed to stop sing-box on exit: {}", e);
         }
     }
+    if model.config.settings.kill_switch {
+        if let Err(e) = crate::services::killswitch::revoke() {
+            tracing::warn!("Failed to flush kill switch handshake set on exit: {}", e);
+        }
+    }
     cleanup_socket();
 
     result
@@ -105,7 +110,20 @@ fn execute_daemon_effect(
             let dns = settings.dns.clone();
             thread::spawn(move || {
                 if kill_switch {
+                    if let Err(e) = crate::services::killswitch::revoke() {
+                        let err = crate::app::msg::IpcError::from(
+                            e.context("failed to clear stale kill switch exceptions"),
+                        );
+                        let _ = tx.send(Msg::ConnectFailed(err));
+                        return;
+                    }
                     if let Err(e) = open_handshake_window(&profile, &dns) {
+                        if let Err(cleanup_err) = crate::services::killswitch::revoke() {
+                            tracing::warn!(
+                                "Failed to clean up kill switch exceptions after handshake error: {}",
+                                cleanup_err
+                            );
+                        }
                         let err = crate::app::msg::IpcError::from(
                             e.context("kill switch handshake setup failed"),
                         );
@@ -120,6 +138,14 @@ fn execute_daemon_effect(
                         let _ = tx.send(Msg::Connected { pid });
                     }
                     Err(e) => {
+                        if kill_switch {
+                            if let Err(cleanup_err) = crate::services::killswitch::revoke() {
+                                tracing::warn!(
+                                    "Failed to clean up kill switch exceptions after connect failure: {}",
+                                    cleanup_err
+                                );
+                            }
+                        }
                         let _ = tx.send(Msg::ConnectFailed(crate::app::msg::IpcError::from(e)));
                     }
                 }
@@ -464,9 +490,10 @@ fn open_handshake_window(
     dns: &crate::config::profile::DnsConfig,
 ) -> Result<()> {
     let endpoints = crate::services::killswitch::resolve_endpoints(&profile.address, profile.port)?;
-    // sing-box VLESS over TLS/REALITY is TCP; we don't have UDP transports today.
     for addr in &endpoints {
-        crate::services::killswitch::allow_endpoint(addr, "tcp")?;
+        for protocol in handshake_protocols(profile.protocol()) {
+            crate::services::killswitch::allow_endpoint(addr, protocol)?;
+        }
     }
     for (host, port, proto) in dns_bootstrap_endpoints(dns) {
         match crate::services::killswitch::resolve_endpoints(&host, port) {
@@ -481,6 +508,25 @@ fn open_handshake_window(
         }
     }
     Ok(())
+}
+
+/// Network protocols that must be allowed to reach a VPN endpoint before the
+/// tunnel is established. QUIC-based outbounds use UDP, while SOCKS and
+/// Shadowsocks may carry traffic over either transport.
+fn handshake_protocols(protocol: crate::config::profile::Protocol) -> &'static [&'static str] {
+    use crate::config::profile::Protocol;
+
+    match protocol {
+        Protocol::Hysteria2 | Protocol::Tuic => &["udp"],
+        Protocol::Shadowsocks | Protocol::Socks => &["tcp", "udp"],
+        Protocol::Vless
+        | Protocol::Vmess
+        | Protocol::Trojan
+        | Protocol::Shadowtls
+        | Protocol::Anytls
+        | Protocol::Http
+        | Protocol::Ssh => &["tcp"],
+    }
 }
 
 /// Return `(host, port, proto)` triples for every DNS server that needs an
@@ -603,4 +649,33 @@ fn spawn_signal_handler(tx: Sender<Msg>) -> Result<()> {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handshake_protocols;
+    use crate::config::profile::Protocol;
+
+    #[test]
+    fn handshake_protocols_match_outbound_transports() {
+        for protocol in [Protocol::Hysteria2, Protocol::Tuic] {
+            assert_eq!(handshake_protocols(protocol), &["udp"]);
+        }
+
+        for protocol in [Protocol::Shadowsocks, Protocol::Socks] {
+            assert_eq!(handshake_protocols(protocol), &["tcp", "udp"]);
+        }
+
+        for protocol in [
+            Protocol::Vless,
+            Protocol::Vmess,
+            Protocol::Trojan,
+            Protocol::Shadowtls,
+            Protocol::Anytls,
+            Protocol::Http,
+            Protocol::Ssh,
+        ] {
+            assert_eq!(handshake_protocols(protocol), &["tcp"]);
+        }
+    }
 }
