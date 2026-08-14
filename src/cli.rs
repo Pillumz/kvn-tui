@@ -41,6 +41,19 @@ enum Command {
         #[arg(long)]
         killswitch: bool,
     },
+
+    /// Remove files left behind by optional integration setup.
+    #[command(group(
+        ArgGroup::new("targets")
+            .required(true)
+            .multiple(true)
+            .args(["omarchy"])
+    ))]
+    Clean {
+        /// Remove backup files created by `setup --omarchy`.
+        #[arg(long)]
+        omarchy: bool,
+    },
 }
 
 /// Run the embedded Omarchy integration installer script.
@@ -52,6 +65,22 @@ fn install_omarchy() -> Result<()> {
     std::fs::remove_file(&tmp).ok();
     if !status.success() {
         anyhow::bail!("install-omarchy.sh exited with status {}", status);
+    }
+    Ok(())
+}
+
+/// Run the embedded Omarchy integration cleanup script.
+fn clean_omarchy() -> Result<()> {
+    let script = include_str!("../contrib/clean-omarchy.sh");
+    let tmp = std::env::temp_dir().join("kvn-tui-clean-omarchy.sh");
+    std::fs::write(&tmp, script)?;
+    let status = std::process::Command::new("bash")
+        .arg(&tmp)
+        .status()
+        .context("failed to run clean-omarchy.sh")?;
+    std::fs::remove_file(&tmp).ok();
+    if !status.success() {
+        anyhow::bail!("clean-omarchy.sh exited with status {}", status);
     }
     Ok(())
 }
@@ -116,6 +145,15 @@ pub fn try_run_from_parsed(cli: &Cli) -> Option<Result<()>> {
                 }
                 if *killswitch {
                     install_killswitch()?;
+                }
+                Ok(())
+            })();
+            return Some(result);
+        }
+        Some(Command::Clean { omarchy }) => {
+            let result = (|| {
+                if *omarchy {
+                    clean_omarchy()?;
                 }
                 Ok(())
             })();
@@ -203,6 +241,20 @@ mod tests {
     #[test]
     fn setup_requires_at_least_one_option() {
         assert!(Cli::try_parse_from(["kvn-tui", "setup"]).is_err());
+    }
+
+    #[test]
+    fn clean_omarchy_option_detected() {
+        let cli = Cli::parse_from(["kvn-tui", "clean", "--omarchy"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Clean { omarchy: true })
+        ));
+    }
+
+    #[test]
+    fn clean_requires_at_least_one_option() {
+        assert!(Cli::try_parse_from(["kvn-tui", "clean"]).is_err());
     }
 
     #[test]

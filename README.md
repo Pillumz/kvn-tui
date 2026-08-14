@@ -139,6 +139,15 @@ After enabling the systemd user service above, the daemon starts automatically
 on login. Open the TUI on demand via the Waybar module, the keybinding, or by
 running `omarchy-launch-kvn-tui`.
 
+After verifying the integration, remove the backup files created by setup with:
+
+```bash
+kvn-tui clean --omarchy
+```
+
+This only removes the five `.bak.before-kvn-tui` files created by kvn-tui; it
+does not remove the integration or modify the active Waybar and Hyprland files.
+
 ### Build & Install from Source
 
 #### Prerequisites
