@@ -1081,6 +1081,16 @@ pub struct Settings {
     pub auto_connect: bool,
     #[serde(default)]
     pub kill_switch: bool,
+    /// Route Steam traffic (Steam domains + Valve's AS32590 ranges) through
+    /// the `direct` outbound in every routing mode, so downloads come from
+    /// CDN nodes near the real network location instead of the VPN exit.
+    /// Off by default — this deliberately sends Steam traffic outside the
+    /// tunnel (and past the kill switch, which allowlists the `direct`
+    /// outbound's fwmark), so it must be an explicit opt-in. No TUI toggle
+    /// yet — edit via the JSON editor (`e`). Silently inactive while the
+    /// Steam rule-set files have not been downloaded yet.
+    #[serde(default)]
+    pub steam_direct: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_profile: Option<Uuid>,
     /// Active UI theme slug. The literal `"omarchy"` is a sentinel that
@@ -1225,6 +1235,7 @@ impl Default for Settings {
             geo_routing: GeoRouting::default(),
             auto_connect: false,
             kill_switch: false,
+            steam_direct: false,
             last_connected_profile: None,
             theme: default_theme(),
             log_level: default_log_level(),
@@ -1644,6 +1655,37 @@ mod tests {
         }"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert!(!s.kill_switch);
+    }
+
+    #[test]
+    fn settings_default_disables_steam_direct() {
+        // Opt-in: sending Steam traffic outside the tunnel must never
+        // happen without an explicit user decision.
+        assert!(!Settings::default().steam_direct);
+    }
+
+    #[test]
+    fn settings_serde_steam_direct_defaults_to_false_when_absent() {
+        let json = r#"{
+            "tun_interface": "tun0",
+            "dns_strategy": "prefer_ipv4",
+            "geo_routing": {},
+            "auto_connect": false
+        }"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert!(!s.steam_direct);
+    }
+
+    #[test]
+    fn settings_serde_steam_direct_true_round_trips() {
+        let s = Settings {
+            steam_direct: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"steam_direct\":true"));
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert!(restored.steam_direct);
     }
 
     #[test]

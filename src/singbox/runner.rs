@@ -69,6 +69,9 @@ fn collect_geo_availability() -> GeoAvailability {
             geo.regions.insert(region, (geoip, geosite));
         }
     }
+    if gm.has_steam_databases() {
+        geo.steam = Some(gm.steam_local_paths());
+    }
     geo
 }
 
@@ -239,6 +242,24 @@ mod tests {
         // geosite missing → Ru must stay absent.
         let geo = collect_geo_availability();
         assert!(!geo.regions.contains_key(&GeoRegion::Ru));
+    }
+
+    #[test]
+    fn collect_geo_availability_includes_steam_when_both_files_present() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = crate::geo::GeoManager::new().unwrap();
+        let (geoip, geosite) = gm.steam_local_paths();
+
+        assert!(collect_geo_availability().steam.is_none());
+        fs::write(&geoip, b"x").unwrap();
+        assert!(
+            collect_geo_availability().steam.is_none(),
+            "geosite missing"
+        );
+        fs::write(&geosite, b"x").unwrap();
+        assert_eq!(collect_geo_availability().steam, Some((geoip, geosite)));
     }
 
     /// Validation against the real `sing-box` binary. Skipped automatically

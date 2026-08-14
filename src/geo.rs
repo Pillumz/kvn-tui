@@ -70,6 +70,26 @@ pub(crate) fn region_assets(region: GeoRegion) -> Option<RegionAssets> {
     }
 }
 
+/// Rule-sets backing the opt-in "Steam goes direct" routing exception
+/// (`settings.steam_direct`).
+/// The geosite file covers Steam domains; the "geoip" file is Valve's
+/// AS32590 announced ranges, which catch content servers that the Steam
+/// client contacts by bare IP (no domain to match on). Local filenames are
+/// normalized to the `geoip-`/`geosite-` scheme even though the ASN file's
+/// upstream basename differs.
+pub(crate) fn steam_assets() -> RegionAssets {
+    RegionAssets {
+        geoip: GeoAsset {
+            filename: "geoip-steam.srs",
+            url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/asn/AS32590.srs",
+        },
+        geosite: GeoAsset {
+            filename: "geosite-steam.srs",
+            url: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-steam.srs",
+        },
+    }
+}
+
 /// Metadata tracking ETags and update time for geo rule-sets.
 #[derive(Debug, Clone, Default, Serialize)]
 struct GeoMetadata {
@@ -130,6 +150,13 @@ impl From<GeoMetadataRaw> for GeoMetadata {
     }
 }
 
+/// Serializes read-modify-write cycles on `metadata.json`. The daemon runs
+/// downloads on detached threads (periodic geo updates, region-change fetch,
+/// post-connect Steam fetch); without this, two interleaved
+/// `load_metadata → save_metadata` cycles lose each other's ETags, forcing
+/// spurious re-downloads. Atomic renames prevent corruption, not lost updates.
+static METADATA_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Manages downloading and updating geoip/geosite rule-sets for sing-box.
 pub struct GeoManager {
     geo_dir: PathBuf,
@@ -146,7 +173,17 @@ impl GeoManager {
             .with_context(|| format!("Failed to create geo dir {:?}", geo_dir))?;
 
         let metadata_path = geo_dir.join("metadata.json");
-        let agent = ureq::Agent::new_with_defaults();
+        // Bounded phase timeouts so a stalled GitHub connection can't wedge
+        // the geo update threads forever. Deliberately not `timeout_global`:
+        // that would also cap the body read, and a multi-hundred-KB `.srs`
+        // on a slow pre-VPN link can legitimately take minutes.
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_resolve(Some(std::time::Duration::from_secs(15)))
+            .timeout_connect(Some(std::time::Duration::from_secs(15)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(30)))
+            .timeout_recv_body(Some(std::time::Duration::from_secs(300)))
+            .build()
+            .into();
 
         Ok(Self {
             geo_dir,
@@ -176,6 +213,77 @@ impl GeoManager {
                 self.geo_dir.join(a.geoip.filename).exists()
                     && self.geo_dir.join(a.geosite.filename).exists()
             }
+        }
+    }
+
+    /// Return `(geoip, geosite)` local paths for the Steam rule-sets. Paths
+    /// are computed; the files may not exist yet.
+    pub fn steam_local_paths(&self) -> (PathBuf, PathBuf) {
+        let a = steam_assets();
+        (
+            self.geo_dir.join(a.geoip.filename),
+            self.geo_dir.join(a.geosite.filename),
+        )
+    }
+
+    /// Return whether both Steam rule-set files are present locally.
+    pub fn has_steam_databases(&self) -> bool {
+        let (geoip, geosite) = self.steam_local_paths();
+        geoip.exists() && geosite.exists()
+    }
+
+    /// Check and, if stale or missing, download the Steam rule-sets.
+    /// Returns `true` when at least one file was (re)downloaded.
+    pub fn update_steam_if_needed(&self) -> Result<bool> {
+        self.update_assets_if_needed(&steam_assets())
+    }
+
+    /// ETag-checked download of an asset pair, persisting ETags for whatever
+    /// succeeded even when a later file fails — otherwise a partial failure
+    /// would force a spurious re-download of the successful file next time.
+    fn update_assets_if_needed(&self, assets: &RegionAssets) -> Result<bool> {
+        let _guard = METADATA_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut meta = self.load_metadata().unwrap_or_default();
+        let mut updated = false;
+        let mut first_err: Option<anyhow::Error> = None;
+        for asset in [&assets.geoip, &assets.geosite] {
+            let dest = self.geo_dir.join(asset.filename);
+            let needed = if dest.exists() {
+                match self.check_single(
+                    asset.url,
+                    meta.etags.get(asset.filename).map(String::as_str),
+                ) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        first_err = Some(e);
+                        break;
+                    }
+                }
+            } else {
+                true
+            };
+            if !needed {
+                continue;
+            }
+            match self.download_file(asset.url, &dest) {
+                Ok(etag) => {
+                    if let Some(e) = etag {
+                        meta.etags.insert(asset.filename.to_string(), e);
+                    }
+                    updated = true;
+                }
+                Err(e) => {
+                    first_err = Some(e.context(format!("Failed to download {}", asset.filename)));
+                    break;
+                }
+            }
+        }
+        if updated {
+            self.save_metadata(&meta)?;
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(updated),
         }
     }
 
@@ -220,8 +328,17 @@ impl GeoManager {
     }
 
     /// Download rule-sets for the given region and update metadata atomically.
-    /// `Global` is a no-op returning `Ok(false)`.
+    /// `Global` is a no-op returning `Ok(false)`. Locked entry point kept for
+    /// tests; production code reaches downloads via `update_if_needed`.
+    #[cfg(test)]
     pub fn download_databases(&self, region: GeoRegion) -> Result<bool> {
+        let _guard = METADATA_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        self.download_databases_inner(region)
+    }
+
+    /// Body of [`Self::download_databases`]; callers must hold
+    /// [`METADATA_LOCK`].
+    fn download_databases_inner(&self, region: GeoRegion) -> Result<bool> {
         let Some(assets) = region_assets(region) else {
             return Ok(false);
         };
@@ -248,6 +365,7 @@ impl GeoManager {
         if matches!(region, GeoRegion::Global) {
             return Ok(GeoResult::UpToDate { checked_at: None });
         }
+        let _guard = METADATA_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
         let (geoip_need, geosite_need) = self.check_update_available(region)?;
 
@@ -261,7 +379,7 @@ impl GeoManager {
             });
         }
 
-        let updated = self.download_databases(region)?;
+        let updated = self.download_databases_inner(region)?;
         if updated {
             let mut parts = Vec::new();
             if geoip_need {
@@ -380,6 +498,165 @@ mod tests {
         let a = region_assets(GeoRegion::Ru).unwrap();
         assert_eq!(a.geoip.tag(), "geoip-ru");
         assert_eq!(a.geosite.tag(), "geosite-category-ru");
+    }
+
+    #[test]
+    fn steam_assets_tags_and_urls() {
+        let a = steam_assets();
+        assert_eq!(a.geoip.tag(), "geoip-steam");
+        assert_eq!(a.geosite.tag(), "geosite-steam");
+        // The ASN file's upstream basename differs from the local filename.
+        assert!(a.geoip.url.ends_with("AS32590.srs"));
+        assert!(a.geosite.url.contains(a.geosite.filename));
+    }
+
+    #[test]
+    fn steam_local_paths_and_presence() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let (geoip, geosite) = gm.steam_local_paths();
+        assert_eq!(geoip.file_name().unwrap(), "geoip-steam.srs");
+        assert_eq!(geosite.file_name().unwrap(), "geosite-steam.srs");
+        assert!(geoip.starts_with(&gm.geo_dir));
+
+        assert!(!gm.has_steam_databases());
+        fs::write(&geoip, b"x").unwrap();
+        assert!(!gm.has_steam_databases(), "only geoip present");
+        fs::write(&geosite, b"x").unwrap();
+        assert!(gm.has_steam_databases());
+    }
+
+    /// Minimal scripted HTTP/1.1 server for exercising the download paths
+    /// without the network. `handler(method, path)` returns
+    /// `(status, etag, body)`. Serves at most `max_requests` connections.
+    fn spawn_stub_http(
+        max_requests: usize,
+        handler: impl Fn(&str, &str) -> (u16, Option<String>, Vec<u8>) + Send + 'static,
+    ) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for _ in 0..max_requests {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut head = Vec::new();
+                let mut buf = [0u8; 2048];
+                loop {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    head.extend_from_slice(&buf[..n]);
+                    if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&head);
+                let mut parts = text.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let path = parts.next().unwrap_or("").to_string();
+                let (status, etag, body) = handler(&method, &path);
+                let mut resp = format!(
+                    "HTTP/1.1 {status} Stub\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    body.len()
+                );
+                if let Some(e) = etag {
+                    resp.push_str(&format!("ETag: {e}\r\n"));
+                }
+                resp.push_str("\r\n");
+                let _ = stream.write_all(resp.as_bytes());
+                if method != "HEAD" {
+                    let _ = stream.write_all(&body);
+                }
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn stub_assets(base: &str) -> RegionAssets {
+        let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        RegionAssets {
+            geoip: GeoAsset {
+                filename: "geoip-stub.srs",
+                url: leak(format!("{base}/geoip")),
+            },
+            geosite: GeoAsset {
+                filename: "geosite-stub.srs",
+                url: leak(format!("{base}/geosite")),
+            },
+        }
+    }
+
+    #[test]
+    fn update_assets_partial_failure_persists_successful_etag() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let base = spawn_stub_http(4, |_, path| {
+            if path == "/geoip" {
+                (200, Some("etag-ok".to_string()), b"AAA".to_vec())
+            } else {
+                (500, None, Vec::new())
+            }
+        });
+        let assets = stub_assets(&base);
+
+        let err = gm.update_assets_if_needed(&assets).unwrap_err().to_string();
+        assert!(err.contains("geosite-stub.srs"), "{err}");
+        // The successful first download and its ETag must survive the
+        // failure of the second, or the next attempt re-downloads it.
+        assert!(gm.geo_dir.join("geoip-stub.srs").exists());
+        assert!(!gm.geo_dir.join("geosite-stub.srs").exists());
+        let meta = gm.load_metadata().unwrap();
+        assert_eq!(
+            meta.etags.get("geoip-stub.srs").map(String::as_str),
+            Some("etag-ok")
+        );
+        assert!(!meta.etags.contains_key("geosite-stub.srs"));
+    }
+
+    #[test]
+    fn update_assets_downloads_both_when_missing_then_skips_via_etag() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let gm = GeoManager::new().unwrap();
+        let base = spawn_stub_http(8, |_, _| (200, Some("same".to_string()), b"DATA".to_vec()));
+        let assets = stub_assets(&base);
+
+        assert!(gm.update_assets_if_needed(&assets).unwrap());
+        assert_eq!(
+            fs::read(gm.geo_dir.join("geoip-stub.srs")).unwrap(),
+            b"DATA"
+        );
+        assert_eq!(
+            fs::read(gm.geo_dir.join("geosite-stub.srs")).unwrap(),
+            b"DATA"
+        );
+        // Second run: files exist and ETags match — HEAD only, no downloads.
+        assert!(!gm.update_assets_if_needed(&assets).unwrap());
+    }
+
+    /// Integration test that hits the real network. Run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn test_download_steam_srs_files() {
+        let gm = GeoManager::new().unwrap();
+        let (geoip, geosite) = gm.steam_local_paths();
+        let _ = fs::remove_file(&geoip);
+        let _ = fs::remove_file(&geosite);
+
+        assert!(gm.update_steam_if_needed().unwrap(), "expected download");
+        assert!(geoip.exists());
+        assert!(geosite.exists());
+        // Second run must be an ETag-checked no-op.
+        assert!(!gm.update_steam_if_needed().unwrap());
     }
 
     #[test]

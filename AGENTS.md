@@ -195,6 +195,7 @@ The **TUI client** (`tui_client.rs`) additionally spawns:
 - The available routing modes depend on the selected **geo region** (`Ru`, `Cn`, `Ir`, or `Global`). `RoutingMode::available(region)` returns the list dynamically.
 - Geo-region and routing-mode preferences are grouped under `settings.geo_routing: GeoRouting`. It stores `current_region: Option<GeoRegion>` and `selected_region_modes: HashMap<GeoRegion, RoutingMode>`. The active mode is derived from `selected_region_modes[current_region]` and falls back to `Global`. Switching back to a previously used region restores its last routing mode.
 - Rule-sets are local `.srs` binary files downloaded to `~/.config/kvn-tui/geo/`.
+- **Steam exception** (`settings.steam_direct`, default off / opt-in): orthogonal to the routing mode — when enabled, `build_route` emits a `geosite-steam`/`geoip-steam` → `direct` rule ahead of the geo rules, so Steam downloads come from CDN nodes near the real location. Assets are defined in `geo::steam_assets()` (Steam domains from SagerNet, Valve's AS32590 ranges from MetaCubeX). They are fetched *through the tunnel* after `Msg::Connected` (`Effect::DownloadSteamIfMissing`) — never pre-connect, where the kill switch or ISP blocks would stall the fetch — and refreshed with the periodic geo updates. Missing files degrade to "no Steam rule", never a failed connection; the rule kicks in on the next reconnect.
 
 ### Share-Link Parsing
 - Entry point: `config::profile::parse_share_link(uri)` dispatches on the URI scheme.

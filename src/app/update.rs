@@ -71,6 +71,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
             model.last_traffic_sample_at_ms = 0;
             model.last_traffic_fetch_at = None;
             let mut effects = vec![Effect::WriteState];
+            // The tunnel is up — fetch the Steam rule-sets through it if
+            // they are still missing (they apply on the next reconnect).
+            if model.config.settings.steam_direct {
+                effects.push(Effect::DownloadSteamIfMissing);
+            }
             if let Some(profile) = model.selected_profile() {
                 let profile_id = profile.id;
                 let profile_name = profile.name.clone();
@@ -1587,6 +1592,23 @@ mod tests {
         assert_eq!(model.connection, ConnectionState::Connected);
         assert_eq!(model.overlay, Overlay::None);
         assert_eq!(effects, vec![Effect::WriteState]);
+    }
+
+    #[test]
+    fn connected_fetches_steam_rule_sets_only_when_enabled() {
+        let mut model = Model::test_new(crate::config::profile::Config::default());
+        model.connection = ConnectionState::ConnectPending;
+        let effects = update(&mut model, Msg::Connected { pid: 1 });
+        assert!(
+            !effects.contains(&Effect::DownloadSteamIfMissing),
+            "steam_direct is off by default — no fetch"
+        );
+
+        let mut model = Model::test_new(crate::config::profile::Config::default());
+        model.config.settings.steam_direct = true;
+        model.connection = ConnectionState::ConnectPending;
+        let effects = update(&mut model, Msg::Connected { pid: 1 });
+        assert!(effects.contains(&Effect::DownloadSteamIfMissing));
     }
 
     #[test]

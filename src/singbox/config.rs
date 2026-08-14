@@ -20,6 +20,9 @@ pub struct GeoAvailability {
     /// disk; `build_route` reads via `get`. Regions without rule-sets
     /// (`GeoRegion::Global`) never appear here.
     pub regions: HashMap<GeoRegion, (PathBuf, PathBuf)>,
+    /// `(geoip_path, geosite_path)` for the Steam rule-sets, present only
+    /// when both files exist on disk.
+    pub steam: Option<(PathBuf, PathBuf)>,
 }
 
 impl GeoAvailability {
@@ -42,7 +45,14 @@ impl GeoAvailability {
                 );
             }
         }
-        Self { regions }
+        let steam = crate::geo::steam_assets();
+        Self {
+            regions,
+            steam: Some((
+                PathBuf::from("/geo").join(steam.geoip.filename),
+                PathBuf::from("/geo").join(steam.geosite.filename),
+            )),
+        }
     }
 }
 
@@ -73,7 +83,12 @@ pub fn generate_config(
 ) -> anyhow::Result<Value> {
     let mut proxy_outbounds = build_outbound(profile)?;
     proxy_outbounds.push(json!({ "type": "direct", "tag": "direct" }));
-    let (route, rule_sets) = build_route(&settings.geo_routing.mode(), &settings.dns, geo);
+    let (route, rule_sets) = build_route(
+        &settings.geo_routing.mode(),
+        &settings.dns,
+        geo,
+        settings.steam_direct,
+    );
     let dns = build_dns(&settings.dns);
 
     let mut cache_file = json!({ "enabled": true });
@@ -250,6 +265,7 @@ fn build_route(
     routing_mode: &RoutingMode,
     dns: &DnsConfig,
     geo: &GeoAvailability,
+    steam_direct: bool,
 ) -> (Value, Vec<Value>) {
     let mut rules = vec![
         json!({
@@ -268,6 +284,28 @@ fn build_route(
     ];
 
     let mut rule_sets: Vec<Value> = Vec::new();
+
+    // Steam goes direct in every routing mode (placed before the geo rules so
+    // it wins under `Only`), so downloads come from CDN nodes near the real
+    // network location. Skipped while the rule-set files are missing — a
+    // pending download must never fail the connection.
+    if steam_direct {
+        if let Some((geoip_path, geosite_path)) = &geo.steam {
+            let assets = crate::geo::steam_assets();
+            rules.push(json!({
+                "rule_set": [assets.geosite.tag(), assets.geoip.tag()],
+                "outbound": "direct",
+            }));
+            for (path, asset) in [(geosite_path, &assets.geosite), (geoip_path, &assets.geoip)] {
+                rule_sets.push(json!({
+                    "tag": asset.tag(),
+                    "type": "local",
+                    "format": "binary",
+                    "path": path,
+                }));
+            }
+        }
+    }
 
     match routing_mode {
         RoutingMode::Global => {}
@@ -917,6 +955,7 @@ mod tests {
             &RoutingMode::Global,
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         assert_eq!(
             route["default_mark"].as_u64(),
@@ -929,7 +968,8 @@ mod tests {
     fn build_route_global_has_basic_rules() {
         let mut dns = dns_default();
         dns.strategy = DnsStrategy::OnlyIpv4;
-        let (route, rule_sets) = build_route(&RoutingMode::Global, &dns, &GeoAvailability::all());
+        let (route, rule_sets) =
+            build_route(&RoutingMode::Global, &dns, &GeoAvailability::all(), false);
         assert!(rule_sets.is_empty());
         let rules = route["rules"].as_array().unwrap();
         assert_eq!(rules.len(), 3); // ipv6 reject, dns hijack, direct cidr
@@ -944,6 +984,7 @@ mod tests {
             &RoutingMode::Only(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
@@ -971,6 +1012,7 @@ mod tests {
             &RoutingMode::Bypass(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
@@ -983,6 +1025,7 @@ mod tests {
             &RoutingMode::Only(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4); // basic 3 + ip_is_private
@@ -1218,6 +1261,7 @@ mod tests {
             &RoutingMode::Bypass(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4);
@@ -1237,6 +1281,7 @@ mod tests {
             &RoutingMode::Only(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         let rules = route["rules"].as_array().unwrap();
         assert!(rules.len() >= 4);
@@ -1251,6 +1296,7 @@ mod tests {
             &RoutingMode::Bypass(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::all(),
+            false,
         );
         assert_eq!(route["final"], "proxy");
         assert_eq!(rule_sets.len(), 2);
@@ -1264,6 +1310,7 @@ mod tests {
             &RoutingMode::Bypass(GeoRegion::Ru),
             &dns_default(),
             &GeoAvailability::default(),
+            false,
         );
         assert!(rule_sets.is_empty());
     }
@@ -1274,6 +1321,7 @@ mod tests {
             &RoutingMode::Only(GeoRegion::Cn),
             &dns_default(),
             &GeoAvailability::default(),
+            false,
         );
         assert!(rule_sets.is_empty());
     }
@@ -1284,6 +1332,7 @@ mod tests {
             &RoutingMode::Bypass(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::default(),
+            false,
         );
         assert!(rule_sets.is_empty());
     }
@@ -1294,8 +1343,110 @@ mod tests {
             &RoutingMode::Only(GeoRegion::Ir),
             &dns_default(),
             &GeoAvailability::default(),
+            false,
         );
         assert!(rule_sets.is_empty());
+    }
+
+    // ---- Steam split routing ----
+
+    #[test]
+    fn build_route_steam_direct_adds_rule_and_rule_sets_in_global() {
+        let (route, rule_sets) = build_route(
+            &RoutingMode::Global,
+            &dns_default(),
+            &GeoAvailability::all(),
+            true,
+        );
+        let rules = route["rules"].as_array().unwrap();
+        let steam_rule = rules
+            .iter()
+            .find(|r| r["rule_set"] == json!(["geosite-steam", "geoip-steam"]))
+            .expect("steam rule present");
+        assert_eq!(steam_rule["outbound"], "direct");
+        let tags: Vec<&str> = rule_sets.iter().filter_map(|r| r["tag"].as_str()).collect();
+        assert_eq!(tags, ["geosite-steam", "geoip-steam"]);
+        assert!(
+            rule_sets
+                .iter()
+                .all(|r| r["type"] == "local" && r["format"] == "binary")
+        );
+    }
+
+    #[test]
+    fn build_route_steam_rule_precedes_geo_rules_under_only() {
+        let (route, rule_sets) = build_route(
+            &RoutingMode::Only(GeoRegion::Ru),
+            &dns_default(),
+            &GeoAvailability::all(),
+            true,
+        );
+        let rules = route["rules"].as_array().unwrap();
+        let steam_idx = rules
+            .iter()
+            .position(|r| r["rule_set"] == json!(["geosite-steam", "geoip-steam"]))
+            .unwrap();
+        let geo_idx = rules
+            .iter()
+            .position(|r| r["rule_set"] == json!(["geosite-category-ru"]))
+            .unwrap();
+        assert!(steam_idx < geo_idx, "steam→direct must win over geo→proxy");
+        assert_eq!(rule_sets.len(), 4);
+    }
+
+    #[test]
+    fn build_route_steam_disabled_emits_no_steam_entries() {
+        let (route, rule_sets) = build_route(
+            &RoutingMode::Global,
+            &dns_default(),
+            &GeoAvailability::all(),
+            false,
+        );
+        assert!(rule_sets.is_empty());
+        assert!(
+            route["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.get("rule_set").is_none())
+        );
+    }
+
+    #[test]
+    fn build_route_steam_enabled_without_files_is_noop() {
+        let (_route, rule_sets) = build_route(
+            &RoutingMode::Global,
+            &dns_default(),
+            &GeoAvailability::default(),
+            true,
+        );
+        assert!(rule_sets.is_empty());
+    }
+
+    #[test]
+    fn generated_config_includes_steam_rule_sets_when_enabled() {
+        let profile = test_profile();
+        let settings = Settings {
+            steam_direct: true,
+            ..Settings::default()
+        };
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        let tags: Vec<&str> = config["route"]["rule_set"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["tag"].as_str())
+            .collect();
+        assert!(tags.contains(&"geosite-steam"));
+        assert!(tags.contains(&"geoip-steam"));
+    }
+
+    #[test]
+    fn generated_config_omits_steam_by_default() {
+        let profile = test_profile();
+        let settings = Settings::default();
+        let config = generate_config(&profile, &settings, &GeoAvailability::all()).unwrap();
+        assert!(config["route"].get("rule_set").is_none());
     }
 
     // ---- build_dns_server for every variant ----

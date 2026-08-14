@@ -340,6 +340,8 @@ When `auto_connect` is enabled, the application stores `last_connected_profile` 
 
 On the very first launch (or when `geo_routing.current_region` is absent), a modal overlay forces you to pick a region before the main UI becomes usable.
 
+`settings.steam_direct` (default `false`) routes Steam traffic through the `direct` outbound in every routing mode, so Steam sees your real network location and picks nearby CDN servers for downloads instead of servers near the VPN exit. It matches Steam domains (`geosite-steam.srs`) plus Valve's AS32590 IP ranges (`geoip-steam.srs`) — note the ASN file covers *all* Valve traffic, including game servers and Steam logins, not just download CDNs. This is an explicit opt-in because it deliberately sends that traffic outside the tunnel (and past the kill switch, which allowlists the `direct` outbound by design). There is no TUI toggle — set the field to `true` via `e`. The rule-set files are fetched through the tunnel right after a successful connect and refreshed alongside the geo databases; while they are missing, the exception is silently inactive and connections proceed without it (it kicks in on the next reconnect after the files arrive).
+
 `settings.theme` is a string slug naming the active color palette. Default: `tokyo-night`. The reserved slug `omarchy` is a sentinel that auto-follows `$XDG_STATE_HOME/omarchy/current/theme.name` on Omarchy 4 and `$XDG_CONFIG_HOME/omarchy/current/theme.name` on Omarchy 3 (and only appears as the `Auto` entry when Omarchy is installed). Any of the 22 bundled palettes can be selected by name — see `themes/*.toml` for the canonical list.
 
 Geo rule-set databases are cached in:

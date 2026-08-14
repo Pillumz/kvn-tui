@@ -181,15 +181,36 @@ fn execute_daemon_effect(
                 .geo_routing
                 .current_region
                 .unwrap_or(crate::config::profile::GeoRegion::Global);
+            let steam_direct = model.config.settings.steam_direct;
             thread::spawn(move || {
                 let result = match crate::geo::GeoManager::new() {
-                    Ok(gm) => match gm.update_if_needed(region) {
-                        Ok(geo_result) => geo_result,
-                        Err(e) => GeoResult::Error(e.to_string()),
-                    },
+                    Ok(gm) => {
+                        if steam_direct {
+                            refresh_steam_rule_sets(&gm);
+                        }
+                        match gm.update_if_needed(region) {
+                            Ok(geo_result) => geo_result,
+                            Err(e) => GeoResult::Error(e.to_string()),
+                        }
+                    }
                     Err(e) => GeoResult::Error(e.to_string()),
                 };
                 let _ = tx.send(Msg::GeoUpdated(result));
+            });
+        }
+        Effect::DownloadSteamIfMissing => {
+            // Fired after the tunnel is up (`Msg::Connected`), so the fetch
+            // goes through the VPN — pre-tunnel, GitHub may be unreachable
+            // (kill switch allowlists only the VPN endpoint, and the ISP may
+            // block it). The rules take effect on the next reconnect; the
+            // route builder tolerates the files' absence until then.
+            thread::spawn(|| {
+                let Ok(gm) = crate::geo::GeoManager::new() else {
+                    return;
+                };
+                if !gm.has_steam_databases() {
+                    refresh_steam_rule_sets(&gm);
+                }
             });
         }
         Effect::RefreshGeoLastUpdated => {
@@ -445,6 +466,16 @@ fn socks5_connect_latency(addr: &str) -> anyhow::Result<u64> {
 }
 
 /// Wall-clock time in milliseconds since the Unix epoch.
+/// Best-effort check/download of the Steam rule-sets, shared by the periodic
+/// geo-update thread and the post-connect fetch. Failures are logged, never
+/// surfaced — the route builder just omits the Steam rules until the files
+/// appear.
+fn refresh_steam_rule_sets(gm: &crate::geo::GeoManager) {
+    if let Err(e) = gm.update_steam_if_needed() {
+        tracing::warn!("Failed to update Steam rule-sets: {e:#}");
+    }
+}
+
 fn unix_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
