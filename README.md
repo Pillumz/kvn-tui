@@ -24,6 +24,7 @@
   - [Polkit setup](#polkit-setup-recommended)
   - [Kill switch setup](#kill-switch-setup-optional)
   - [Build from source](#build--install-from-source)
+- [Diagnostics](#diagnostics)
 - [Quick Start](#quick-start)
 - [Default Key Bindings](#default-key-bindings)
 - [Supported Protocols](#supported-protocols)
@@ -192,6 +193,16 @@ daemon fallback or copy `contrib/kvn-tui.service` into
 `~/.config/systemd/user/`, change `ExecStart` to point to the
 `/usr/local/bin/kvn-tui --daemon` command, then enable it with
 `systemctl --user enable --now kvn-tui.service`.
+
+## Diagnostics
+
+Run the read-only environment check if kvn-tui cannot start or connect:
+
+```bash
+kvn-tui doctor
+```
+
+The command checks sing-box and its capabilities, `profiles.json`, the daemon and IPC socket, clipboard integration, polkit authorization, the kill switch, and Omarchy integration. It prints remediation hints for detected problems and returns a non-zero exit status only when a required runtime dependency is unusable. Run it as your regular user so the checks use the same environment as the TUI.
 
 ---
 
