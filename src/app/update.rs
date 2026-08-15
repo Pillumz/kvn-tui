@@ -2580,15 +2580,17 @@ mod tests {
     }
 
     /// On a non-Omarchy system the picker omits the Auto entry, so the
-    /// list is exactly the 19 bundled palette names.
+    /// list is exactly the 22 bundled palette names.
     #[test]
     fn theme_picker_omits_auto_when_omarchy_absent() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let slugs = crate::app::update::theme_picker_slugs();
         assert!(!slugs.iter().any(|s| s == "omarchy"));
-        assert_eq!(slugs.len(), 19);
+        assert_eq!(slugs.len(), 22);
     }
 
     // ── Profile testing ──────────────────────────────────────────────────────

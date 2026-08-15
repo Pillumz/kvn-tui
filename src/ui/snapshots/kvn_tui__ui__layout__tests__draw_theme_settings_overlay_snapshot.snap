@@ -1,6 +1,6 @@
 ---
 source: src/ui/layout.rs
-expression: "snapshot_terminal(&model, 80, 30)"
+expression: "snapshot_terminal(&model, 80, 32)"
 ---
 ┌ Sources ─────────────────────────────┐┌ Logs ────────────────────────────────┐
 │No sources. Press p to paste a profile││                                      │
@@ -15,7 +15,9 @@ expression: "snapshot_terminal(&model, 80, 30)"
 │               │                   > gruvbox                  │               │
 │               │                   hackerman                  │               │
 │               │                   kanagawa                   │               │
+│               │                 last-horizon                 │               │
 │               │                     lumon                    │               │
+│               │                    lupine                    │               │
 │               │                  matte-black                 │               │
 │               │                    miasma                    │               │
 │               │                     nord                     │               │
@@ -23,12 +25,12 @@ expression: "snapshot_terminal(&model, 80, 30)"
 │               │                   retro-82                   │               │
 │               │                   ristretto                  │               │
 │               │                   rose-pine                  │               │
+│               │                   solitude                   │               │
 │               │                  tokyo-night                 │               │
 │               │                  vantablack                  │               │
 │               │                     white                    │               │
 │               │                                              │               │
 │               │    j/k navigate, Enter confirm, Esc cancel   │               │
-│               │                                              │               │
-│               │                                              │               │
-└───────────────└──────────────────────────────────────────────┘───────────────┘
+│               └──────────────────────────────────────────────┘               │
+└──────────────────────────────────────┘└──────────────────────────────────────┘
 [DISCONNECTED] [DNS: DoH] [Global] [Geo: 2026-05-31 13:41]

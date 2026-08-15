@@ -6,27 +6,23 @@ use std::path::Path;
 #[derive(serde::Deserialize)]
 struct Colors {
     accent: String,
-    cursor: String,
+    selection: String,
+    muted: String,
     foreground: String,
     background: String,
-    selection_foreground: String,
-    selection_background: String,
-    color0: String,
-    color1: String,
-    color2: String,
-    color3: String,
-    color4: String,
-    color5: String,
-    color6: String,
-    color7: String,
-    color8: String,
-    color9: String,
-    color10: String,
-    color11: String,
-    color12: String,
-    color13: String,
-    color14: String,
-    color15: String,
+    bright_foreground: String,
+    red: String,
+    yellow: String,
+    green: String,
+    cyan: String,
+    blue: String,
+    magenta: String,
+    bright_red: String,
+    bright_yellow: String,
+    bright_green: String,
+    bright_cyan: String,
+    bright_blue: String,
+    bright_magenta: String,
 }
 
 fn parse_hex(hex: &str) -> (u8, u8, u8) {
@@ -72,26 +68,39 @@ fn main() {
     for (name, c) in &entries {
         writeln!(out, "    (\"{name}\", Palette {{").unwrap();
         writeln!(out, "        accent: {},", fmt_color(&c.accent)).unwrap();
-        writeln!(out, "        cursor: {},", fmt_color(&c.cursor)).unwrap();
+        writeln!(out, "        cursor: {},", fmt_color(&c.bright_foreground)).unwrap();
         writeln!(out, "        foreground: {},", fmt_color(&c.foreground)).unwrap();
         writeln!(out, "        background: {},", fmt_color(&c.background)).unwrap();
         writeln!(
             out,
             "        selection_foreground: {},",
-            fmt_color(&c.selection_foreground)
+            fmt_color(&c.bright_foreground)
         )
         .unwrap();
         writeln!(
             out,
             "        selection_background: {},",
-            fmt_color(&c.selection_background)
+            fmt_color(&c.selection)
         )
         .unwrap();
         writeln!(out, "        ansi: [").unwrap();
         let colors = [
-            &c.color0, &c.color1, &c.color2, &c.color3, &c.color4, &c.color5, &c.color6, &c.color7,
-            &c.color8, &c.color9, &c.color10, &c.color11, &c.color12, &c.color13, &c.color14,
-            &c.color15,
+            &c.background,
+            &c.red,
+            &c.green,
+            &c.yellow,
+            &c.blue,
+            &c.magenta,
+            &c.cyan,
+            &c.foreground,
+            &c.muted,
+            &c.bright_red,
+            &c.bright_green,
+            &c.bright_yellow,
+            &c.bright_blue,
+            &c.bright_magenta,
+            &c.bright_cyan,
+            &c.bright_foreground,
         ];
         for chunk in colors.chunks(4) {
             let line: Vec<String> = chunk.iter().map(|hex| fmt_color(hex)).collect();

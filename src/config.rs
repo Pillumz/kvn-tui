@@ -144,7 +144,9 @@ mod tests {
     fn load_config_first_launch_on_omarchy_sets_sentinel() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let _ = std::fs::remove_file(crate::paths::profiles_path().unwrap());
         let current = dir.path().join("omarchy").join("current");
         std::fs::create_dir_all(&current).unwrap();
@@ -158,7 +160,9 @@ mod tests {
     fn load_config_first_launch_without_omarchy_keeps_default() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let _ = std::fs::remove_file(crate::paths::profiles_path().unwrap());
 
         let config = load_config().unwrap();
@@ -169,7 +173,9 @@ mod tests {
     fn load_config_existing_file_ignores_omarchy() {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let current = dir.path().join("omarchy").join("current");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join("theme.name"), "gruvbox\n").unwrap();

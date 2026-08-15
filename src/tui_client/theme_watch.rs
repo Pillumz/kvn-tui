@@ -1,11 +1,9 @@
 //! Follow the active Omarchy theme at runtime.
 //!
-//! Omarchy stores its active theme as a single-line slug in
-//! `~/.config/omarchy/current/theme.name`. On theme change the whole
-//! `current/` directory is atomically replaced, so we watch the **parent**
-//! directory (`omarchy/`) rather than the file itself — watching a file that
-//! gets unlinked-then-recreated is unreliable across most file-watcher
-//! backends.
+//! Omarchy 4 stores its active theme as a single-line slug in
+//! `~/.local/state/omarchy/current/theme.name`; Omarchy 3 used
+//! `~/.config/omarchy/current/theme.name`. The shared detection helper picks
+//! the active layout and this watcher follows its `current/` directory.
 //!
 //! On non-Omarchy systems the watched directory does not exist and the
 //! watcher exits immediately without spawning any background work.
@@ -49,7 +47,7 @@ pub fn resolve_active(settings_theme: &str) -> Theme {
     }
 }
 
-/// Spawn a background thread that watches Omarchy's `current/` directory
+/// Spawn a background thread that watches Omarchy's active `current/` directory
 /// for theme changes and sends [`Msg::ThemeChanged`] when the active slug
 /// changes. Returns immediately and does nothing if Omarchy isn't installed.
 pub fn spawn_theme_watcher(tx: Sender<Msg>) {
@@ -117,8 +115,10 @@ mod tests {
     #[test]
     fn resolve_active_uses_named_slug_directly() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let theme = resolve_active("gruvbox");
         // Gruvbox accent is #7daea3 — matches themes/gruvbox.toml.
         assert_eq!(
@@ -130,8 +130,10 @@ mod tests {
     #[test]
     fn resolve_active_omarchy_sentinel_without_file_falls_back_to_default() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let theme = resolve_active(OMARCHY_SENTINEL);
         // Default fallback is tokyo-night (#7aa2f7 accent).
         assert_eq!(
@@ -143,9 +145,11 @@ mod tests {
     #[test]
     fn resolve_active_omarchy_sentinel_reads_theme_name_when_present() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-        let current = dir.path().join("omarchy").join("current");
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        let current = state.path().join("omarchy").join("current");
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join("theme.name"), "nord\n").unwrap();
         let theme = resolve_active(OMARCHY_SENTINEL);

@@ -3,6 +3,9 @@ set -e
 
 BACKUP_SUFFIX=".bak.before-kvn-tui"
 FILES=(
+  "${HOME}/.config/omarchy/shell.json"
+  "${HOME}/.config/hypr/bindings.lua"
+  "${HOME}/.config/hypr/hyprland.lua"
   "${HOME}/.config/waybar/config.jsonc"
   "${HOME}/.config/waybar/style.css"
   "${HOME}/.config/hypr/autostart.conf"

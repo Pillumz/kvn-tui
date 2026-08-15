@@ -8,8 +8,8 @@
 
 use ratatui::style::Color;
 
-/// A self-contained color palette. Matches the schema used by Omarchy's
-/// per-theme `colors.toml`: six semantic colors plus a 16-entry ANSI ramp.
+/// A self-contained color palette derived at build time from Omarchy 4's
+/// semantic `colors.toml` schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
     pub accent: Color,
@@ -25,7 +25,7 @@ include!(concat!(env!("OUT_DIR"), "/bundled_palettes.rs"));
 
 impl Palette {
     /// Look up a bundled palette by Omarchy theme name (snake-case slug from
-    /// `~/.config/omarchy/current/theme.name`).
+    /// active `theme.name`).
     pub fn lookup(name: &str) -> Option<Palette> {
         BUNDLED.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
     }
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundles_all_19_omarchy_themes() {
+    fn bundles_all_22_omarchy_themes() {
         let names = Palette::bundled_names();
         let expected = [
             "catppuccin",
@@ -124,7 +124,9 @@ mod tests {
             "gruvbox",
             "hackerman",
             "kanagawa",
+            "last-horizon",
             "lumon",
+            "lupine",
             "matte-black",
             "miasma",
             "nord",
@@ -132,6 +134,7 @@ mod tests {
             "retro-82",
             "ristretto",
             "rose-pine",
+            "solitude",
             "tokyo-night",
             "vantablack",
             "white",

@@ -404,11 +404,23 @@ fn draw_selection_modal(
     active: Option<usize>,
     height_percent: u16,
 ) {
+    let popup_area = centered_rect(POPUP_WIDTH_PERCENT, height_percent, area);
+    let max_visible_items = popup_area.height.saturating_sub(6) as usize;
+    let visible_count = items.len().min(max_visible_items);
+    let window_start = if items.len() > visible_count {
+        selected
+            .saturating_sub(visible_count / 2)
+            .min(items.len() - visible_count)
+    } else {
+        0
+    };
+    let window_end = window_start + visible_count;
+
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(heading, theme.accent())),
         Line::from(""),
     ];
-    for (i, label) in items.iter().enumerate() {
+    for (i, label) in items.iter().enumerate().take(window_end).skip(window_start) {
         let marker = if i == selected { "> " } else { "  " };
         let is_active = active == Some(i);
         let style = if is_active {
@@ -1008,6 +1020,7 @@ mod tests {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", dir.path()) };
         let mut model = model_with_profiles(vec![]);
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::ThemeSettings;
@@ -1017,7 +1030,7 @@ mod tests {
             .iter()
             .position(|s| s == &model.config.settings.theme)
             .unwrap_or(0);
-        insta::assert_snapshot!(snapshot_terminal(&model, 80, 30));
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 32));
     }
 
     /// Theme picker rendered with a light palette — sanity check for
@@ -1027,6 +1040,7 @@ mod tests {
         let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", dir.path()) };
         let mut model = model_with_profiles(vec![]);
         model.geo_last_updated = Some("2026-05-31 13:41".to_string());
         model.overlay = Overlay::ThemeSettings;
@@ -1037,7 +1051,23 @@ mod tests {
             .iter()
             .position(|s| s == &model.config.settings.theme)
             .unwrap_or(0);
-        insta::assert_snapshot!(snapshot_terminal(&model, 80, 30));
+        insta::assert_snapshot!(snapshot_terminal(&model, 80, 32));
+    }
+
+    #[test]
+    fn theme_picker_scrolls_to_keep_selection_and_footer_visible() {
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", dir.path()) };
+        let mut model = model_with_profiles(vec![]);
+        model.overlay = Overlay::ThemeSettings;
+        model.theme_selected = crate::app::update::theme_picker_slugs().len() - 1;
+
+        let rendered = snapshot_terminal(&model, 80, 24);
+        assert!(rendered.contains("> white"));
+        assert!(rendered.contains("j/k navigate, Enter confirm, Esc cancel"));
+        assert!(!rendered.contains("catppuccin-latte"));
     }
 
     #[test]

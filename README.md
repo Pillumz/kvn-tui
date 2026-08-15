@@ -51,7 +51,7 @@
 - **Suspend/resume awareness** — automatically detects system resume via D-Bus and reconnects
 - **Live logs** — split-pane view interleaves sing-box output with app events; both streams are also persisted to `sing-box.log` and `app.log` on disk
 - **Live traffic statistics** — full-width header above the main panes shows instantaneous ↑/↓ rate, cumulative totals, and active connection count while connected; data is scraped from sing-box's Clash API once per second
-- **Themable** — 19 bundled [Omarchy](https://omarchy.org/) palettes (gruvbox, tokyo-night, catppuccin, nord, kanagawa, rose-pine, …) compiled into the binary; pick interactively via `C` and persist the choice in `profiles.json`. On Omarchy systems the `omarchy` slug auto-follows `~/.config/omarchy/current/theme.name` and updates live on `omarchy theme set …`
+- **Themable** — all 22 [Omarchy 4](https://omarchy.org/) palettes (including Last Horizon, Lupine, and Solitude) are compiled into the binary; pick one interactively via `C` and persist it in `profiles.json`. The `omarchy` slug follows Omarchy 4's `$XDG_STATE_HOME/omarchy/current/theme.name`, with the Omarchy 3 config path as a fallback, and updates live on `omarchy theme set …`
 
 ---
 
@@ -118,7 +118,7 @@ Once installed, press `K` in the TUI to enable or disable the kill switch. The s
 
 ### Omarchy Setup (optional)
 
-If you use [Omarchy](https://omarchy.org/), run this after installation to enable Waybar integration:
+If you use [Omarchy](https://omarchy.org/), run this after installation to enable desktop integration. The installer detects Omarchy 3 or 4 automatically:
 
 ```bash
 kvn-tui setup --omarchy
@@ -127,16 +127,20 @@ kvn-tui setup --omarchy
 This automatically:
 
 - Installs the `omarchy-launch-kvn-tui` launcher script to `~/.local/bin/`
-- Adds a `custom/kvn-tui` module to Waybar (shows connected/disconnected status, clicks open the TUI)
-- Optionally adds a Hyprland keybinding to open the TUI (default: `Super + Ctrl + K`)
+- Adds a clickable command module to Omarchy Shell 4, or a `custom/kvn-tui` module to Waybar on Omarchy 3
+- Optionally adds a Hyprland keybinding to open the TUI; press Enter for `Super + Ctrl + K` or enter a custom combination such as `SUPER SHIFT, V`
 - Configures the TUI window to open centered and floating
-- Backs up your Waybar and Hyprland configs before modifying them
-- Restarts Waybar to apply changes
+- Backs up the Shell/Waybar and Hyprland configs before modifying them
+- Validates and hot-reloads Hyprland; Omarchy 3 also restarts Waybar
 
 > The installer is idempotent — running it again will skip already-applied changes.
 
+> On Omarchy 4, `Super + Ctrl + K` is assigned to Herdr by default. If you accept
+> the suggested binding, the installer explicitly unbinds Herdr first and assigns
+> that shortcut to kvn-tui.
+
 After enabling the systemd user service above, the daemon starts automatically
-on login. Open the TUI on demand via the Waybar module, the keybinding, or by
+on login. Open the TUI on demand via the status-bar module, the keybinding, or by
 running `omarchy-launch-kvn-tui`.
 
 After verifying the integration, remove the backup files created by setup with:
@@ -145,7 +149,7 @@ After verifying the integration, remove the backup files created by setup with:
 kvn-tui clean --omarchy
 ```
 
-This only removes the five `.bak.before-kvn-tui` files created by kvn-tui; it
+This only removes the `.bak.before-kvn-tui` files created by kvn-tui; it
 does not remove the integration or modify the active Waybar and Hyprland files.
 
 ### Build & Install from Source
@@ -335,7 +339,7 @@ When `auto_connect` is enabled, the application stores `last_connected_profile` 
 
 On the very first launch (or when `geo_routing.current_region` is absent), a modal overlay forces you to pick a region before the main UI becomes usable.
 
-`settings.theme` is a string slug naming the active color palette. Default: `tokyo-night`. The reserved slug `omarchy` is a sentinel that auto-follows `~/.config/omarchy/current/theme.name` (and only appears as the `Auto` entry in the picker when Omarchy is installed). Any of the 19 bundled palettes can be selected by name — see `themes/*.toml` in the repository for the canonical list.
+`settings.theme` is a string slug naming the active color palette. Default: `tokyo-night`. The reserved slug `omarchy` is a sentinel that auto-follows `$XDG_STATE_HOME/omarchy/current/theme.name` on Omarchy 4 and `$XDG_CONFIG_HOME/omarchy/current/theme.name` on Omarchy 3 (and only appears as the `Auto` entry when Omarchy is installed). Any of the 22 bundled palettes can be selected by name — see `themes/*.toml` for the canonical list.
 
 Geo rule-set databases are cached in:
 
