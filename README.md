@@ -31,6 +31,7 @@
 - [Configuration](#configuration)
 - [Technology Stack](#technology-stack)
 - [Architecture Highlights](#architecture-highlights)
+- [Upgrading to v0.22.0 on Omarchy](#upgrading-to-v0220-on-omarchy)
 - [Upgrading to v0.20.0](#upgrading-to-v0200)
 - [Author](#author)
 - [License](#license)
@@ -380,6 +381,12 @@ Under the hood, `kvn-tui` is built entirely in **Rust** and leverages the follow
 - **sing-box runner** — generates valid sing-box 1.12+ JSON from profile data, validates with `sing-box check`, and spawns the process with crash detection.
 - **Atomic config writes** — `profiles.json` is written to a temp file and renamed to prevent corruption.
 - **State I/O** — connection status and active profile are persisted to `state.json` for waybar integration and crash recovery.
+
+---
+
+## Upgrading to v0.22.0 on Omarchy
+
+Version 0.22.0 adds native Omarchy 4 Shell and Lua integration, updates active-theme detection, and retains the Omarchy 3 Waybar flow. Omarchy users upgrading from an earlier kvn-tui release should follow the [v0.22.0 migration guide](docs/migrations/v0.22.0.md).
 
 ---
 
