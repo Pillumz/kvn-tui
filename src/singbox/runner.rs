@@ -169,6 +169,9 @@ mod tests {
 
     #[test]
     fn write_config_creates_valid_json() {
+        // temp_singbox_config_path() reads XDG_RUNTIME_DIR, which other tests
+        // point at short-lived tempdirs — hold ENV_LOCK so the path stays valid.
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         let profile = Profile::new_vless(
             "Test".to_string(),
             "1.2.3.4".to_string(),
@@ -245,6 +248,8 @@ mod tests {
     /// when the binary is not on PATH so CI without sing-box stays green.
     #[test]
     fn check_config_accepts_a_minimal_profile() {
+        // Same XDG_RUNTIME_DIR dependency as write_config_creates_valid_json.
+        let _guard = crate::test_helpers::ENV_LOCK.lock().unwrap();
         if Command::new("sh")
             .args(["-c", "command -v sing-box >/dev/null 2>&1"])
             .status()
