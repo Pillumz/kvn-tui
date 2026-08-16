@@ -588,10 +588,10 @@ fn handle_subscription_result(
 
     // If the active profile was removed from the subscription, disconnect so the
     // tunnel doesn't run against a profile that no longer exists.
-    if let Some(active_id) = model.active_profile_id {
-        if !model.config.profiles.iter().any(|p| p.id == active_id) {
-            effects.push(Effect::Disconnect);
-        }
+    if let Some(active_id) = model.active_profile_id
+        && !model.config.profiles.iter().any(|p| p.id == active_id)
+    {
+        effects.push(Effect::Disconnect);
     }
 
     // Restore cursor to the subscription header (add_profile moves it on every

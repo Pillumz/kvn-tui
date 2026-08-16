@@ -32,10 +32,10 @@ pub fn listen_blocking(tx: Sender<Msg>) {
     };
 
     for msg in iter.flatten() {
-        if let Ok(going_to_sleep) = msg.body().deserialize::<bool>() {
-            if !going_to_sleep {
-                let _ = tx.send(Msg::SystemResumed);
-            }
+        if let Ok(going_to_sleep) = msg.body().deserialize::<bool>()
+            && !going_to_sleep
+        {
+            let _ = tx.send(Msg::SystemResumed);
         }
     }
 }

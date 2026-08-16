@@ -32,15 +32,15 @@ pub fn run(mut model: Model) -> Result<()> {
     let result = run_loop(&mut model, rx, &tx, process_slot.clone(), &ipc_server);
 
     // Cleanup
-    if let Some(mut handle) = lock_process_slot(&process_slot).take() {
-        if let Err(e) = handle.kill_and_wait() {
-            tracing::warn!("Failed to stop sing-box on exit: {}", e);
-        }
+    if let Some(mut handle) = lock_process_slot(&process_slot).take()
+        && let Err(e) = handle.kill_and_wait()
+    {
+        tracing::warn!("Failed to stop sing-box on exit: {}", e);
     }
-    if model.config.settings.kill_switch {
-        if let Err(e) = crate::services::killswitch::revoke() {
-            tracing::warn!("Failed to flush kill switch handshake set on exit: {}", e);
-        }
+    if model.config.settings.kill_switch
+        && let Err(e) = crate::services::killswitch::revoke()
+    {
+        tracing::warn!("Failed to flush kill switch handshake set on exit: {}", e);
     }
     cleanup_socket();
 
@@ -98,10 +98,10 @@ fn execute_daemon_effect(
 ) -> Result<()> {
     match effect {
         Effect::Connect { profile, settings } => {
-            if let Some(mut handle) = lock_process_slot(process_slot).take() {
-                if let Err(e) = handle.kill_and_wait() {
-                    tracing::warn!("Failed to stop sing-box process: {}", e);
-                }
+            if let Some(mut handle) = lock_process_slot(process_slot).take()
+                && let Err(e) = handle.kill_and_wait()
+            {
+                tracing::warn!("Failed to stop sing-box process: {}", e);
             }
             model.connection = ConnectionState::ConnectPending;
             let tx = tx.clone();
@@ -138,13 +138,13 @@ fn execute_daemon_effect(
                         let _ = tx.send(Msg::Connected { pid });
                     }
                     Err(e) => {
-                        if kill_switch {
-                            if let Err(cleanup_err) = crate::services::killswitch::revoke() {
-                                tracing::warn!(
-                                    "Failed to clean up kill switch exceptions after connect failure: {}",
-                                    cleanup_err
-                                );
-                            }
+                        if kill_switch
+                            && let Err(cleanup_err) = crate::services::killswitch::revoke()
+                        {
+                            tracing::warn!(
+                                "Failed to clean up kill switch exceptions after connect failure: {}",
+                                cleanup_err
+                            );
                         }
                         let _ = tx.send(Msg::ConnectFailed(crate::app::msg::IpcError::from(e)));
                     }
@@ -152,10 +152,10 @@ fn execute_daemon_effect(
             });
         }
         Effect::Disconnect => {
-            if let Some(mut handle) = lock_process_slot(process_slot).take() {
-                if let Err(e) = handle.kill_and_wait() {
-                    tracing::warn!("Failed to stop sing-box process: {}", e);
-                }
+            if let Some(mut handle) = lock_process_slot(process_slot).take()
+                && let Err(e) = handle.kill_and_wait()
+            {
+                tracing::warn!("Failed to stop sing-box process: {}", e);
             }
             model.connection = ConnectionState::Idle;
             model.active_profile_id = None;
@@ -166,10 +166,10 @@ fn execute_daemon_effect(
             model.set_status(AppStatus::Info("Disconnected".into()));
             model.overlay = Overlay::None;
             crate::services::waybar::write_state(model);
-            if model.config.settings.kill_switch {
-                if let Err(e) = crate::services::killswitch::revoke() {
-                    tracing::warn!("Failed to flush kill switch handshake set: {}", e);
-                }
+            if model.config.settings.kill_switch
+                && let Err(e) = crate::services::killswitch::revoke()
+            {
+                tracing::warn!("Failed to flush kill switch handshake set: {}", e);
             }
         }
         Effect::DownloadGeo => {

@@ -590,25 +590,24 @@ pub(super) fn handle_geo_region(model: &mut Model, key: KeyEvent) -> Vec<Effect>
 
                 // Trigger auto-connect immediately after picking a region
                 // so the user does not have to restart the app.
-                if model.config.settings.auto_connect {
-                    if let Some(idx) = model
+                if model.config.settings.auto_connect
+                    && let Some(idx) = model
                         .config
                         .settings
                         .last_connected_profile
                         .and_then(|id| model.config.profiles.iter().position(|p| p.id == id))
-                    {
-                        model.selected = crate::app::model::row_for_profile(&model.config, idx);
-                        model.connection = ConnectionState::Connecting;
-                        if let Some(profile) = model.config.profiles.get(idx) {
-                            push_status(
-                                &mut effects,
-                                model,
-                                crate::app::model::AppStatus::Info(format!(
-                                    "Auto-connecting to {}…",
-                                    profile.name
-                                )),
-                            );
-                        }
+                {
+                    model.selected = crate::app::model::row_for_profile(&model.config, idx);
+                    model.connection = ConnectionState::Connecting;
+                    if let Some(profile) = model.config.profiles.get(idx) {
+                        push_status(
+                            &mut effects,
+                            model,
+                            crate::app::model::AppStatus::Info(format!(
+                                "Auto-connecting to {}…",
+                                profile.name
+                            )),
+                        );
                     }
                 }
 
@@ -850,17 +849,17 @@ fn apply_dns_item(model: &mut Model, item: DnsSettingsItem) -> Vec<Effect> {
     if servers_changed || strategy_changed || fakeip_changed {
         effects.push(Effect::SaveConfig);
         effects.push(Effect::BroadcastState);
-        if model.connection == ConnectionState::Connected {
-            if let Some(profile) = model.selected_profile().cloned() {
-                let settings = model.config.settings.clone();
-                model.connection = ConnectionState::Connecting;
-                push_status(
-                    &mut effects,
-                    model,
-                    AppStatus::Info("DNS changed — reconnecting…".into()),
-                );
-                effects.push(Effect::Connect { profile, settings });
-            }
+        if model.connection == ConnectionState::Connected
+            && let Some(profile) = model.selected_profile().cloned()
+        {
+            let settings = model.config.settings.clone();
+            model.connection = ConnectionState::Connecting;
+            push_status(
+                &mut effects,
+                model,
+                AppStatus::Info("DNS changed — reconnecting…".into()),
+            );
+            effects.push(Effect::Connect { profile, settings });
         }
     }
 

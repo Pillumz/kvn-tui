@@ -1305,10 +1305,10 @@ impl Config {
             }
         }
 
-        if let Some(id) = self.settings.default_profile {
-            if !self.profiles.iter().any(|p| p.id == id) {
-                anyhow::bail!("settings.default_profile ({id}) references a non-existent profile");
-            }
+        if let Some(id) = self.settings.default_profile
+            && !self.profiles.iter().any(|p| p.id == id)
+        {
+            anyhow::bail!("settings.default_profile ({id}) references a non-existent profile");
         }
 
         self.settings.validate()?;
@@ -1363,12 +1363,11 @@ impl Config {
     /// here. Idempotent: `.take()` clears the legacy slot on the first run.
     fn migrate_v1_to_v2(&mut self) {
         for profile in &mut self.profiles {
-            if let ProtocolConfig::Vless(cfg) = &mut profile.config {
-                if let Some(fp) = cfg.legacy_fingerprint.take()
-                    && cfg.tls.utls_fingerprint.is_none()
-                {
-                    cfg.tls.utls_fingerprint = Some(fp);
-                }
+            if let ProtocolConfig::Vless(cfg) = &mut profile.config
+                && let Some(fp) = cfg.legacy_fingerprint.take()
+                && cfg.tls.utls_fingerprint.is_none()
+            {
+                cfg.tls.utls_fingerprint = Some(fp);
             }
         }
     }

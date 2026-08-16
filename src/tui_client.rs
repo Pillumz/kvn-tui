@@ -155,21 +155,21 @@ fn run_loop(
                     }
                     KeyCode::Char('y') if model.overlay == crate::app::model::Overlay::None => {
                         if let Some(profile) = model.selected_profile() {
-                            if let Ok(link) = crate::config::profile::encode_share_link(profile) {
-                                if self::clipboard::write_clipboard_text(&link).is_ok() {
-                                    client.send(&IpcCommand::Copied {
-                                        name: profile.name.clone(),
-                                        count: 1,
-                                    })?;
-                                }
-                            }
-                        } else if let Some(sub) = model.selected_subscription() {
-                            if self::clipboard::write_clipboard_text(&sub.url).is_ok() {
+                            if let Ok(link) = crate::config::profile::encode_share_link(profile)
+                                && self::clipboard::write_clipboard_text(&link).is_ok()
+                            {
                                 client.send(&IpcCommand::Copied {
-                                    name: sub.name.clone(),
+                                    name: profile.name.clone(),
                                     count: 1,
                                 })?;
                             }
+                        } else if let Some(sub) = model.selected_subscription()
+                            && self::clipboard::write_clipboard_text(&sub.url).is_ok()
+                        {
+                            client.send(&IpcCommand::Copied {
+                                name: sub.name.clone(),
+                                count: 1,
+                            })?;
                         }
                     }
                     KeyCode::Char('e') => {

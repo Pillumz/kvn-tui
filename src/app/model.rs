@@ -393,23 +393,22 @@ impl Model {
         config: &Config,
         default_selected: usize,
     ) -> (ConnectionState, usize, AppStatus) {
-        if config.settings.auto_connect {
-            if let Some(idx) = config
+        if config.settings.auto_connect
+            && let Some(idx) = config
                 .settings
                 .last_connected_profile
                 .and_then(|id| config.profiles.iter().position(|p| p.id == id))
-            {
-                let status = if let Some(profile) = config.profiles.get(idx) {
-                    AppStatus::Info(format!("Auto-connecting to {}…", profile.name))
-                } else {
-                    AppStatus::Info("Press ? for help".to_string())
-                };
-                return (
-                    ConnectionState::Connecting,
-                    row_for_profile(config, idx),
-                    status,
-                );
-            }
+        {
+            let status = if let Some(profile) = config.profiles.get(idx) {
+                AppStatus::Info(format!("Auto-connecting to {}…", profile.name))
+            } else {
+                AppStatus::Info("Press ? for help".to_string())
+            };
+            return (
+                ConnectionState::Connecting,
+                row_for_profile(config, idx),
+                status,
+            );
         }
         (
             ConnectionState::Idle,

@@ -45,7 +45,7 @@ The app does **not** implement VPN protocols itself. It is a configuration gener
 
 ## Build System & Dependencies
 
-- **Rust**: edition 2024, minimum version 1.87
+- **Rust**: edition 2024, minimum version 1.88
 - **External binary**: `sing-box` must be installed separately and available on `$PATH` (or via `SING_BOX_PATH` env var)
 - **Key crates**: `ratatui` + `crossterm` (TUI), `serde` + `serde_json` (config), `zbus` (D-Bus), `ureq` (HTTP), `tracing` (logs), `anyhow` + `thiserror` (errors)
 

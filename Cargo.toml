@@ -6,7 +6,7 @@ authors = ["Dmitry Yarikov <dmitry@yarikov.com>"]
 description = "Terminal VPN client for Arch Linux + Wayland with vim navigation"
 license = "MIT"
 repository = "https://github.com/yarikov/kvn-tui"
-rust-version = "1.87"
+rust-version = "1.88"
 
 [dependencies]
 # TUI framework
@@ -16,7 +16,7 @@ crossterm = "0.29"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "1.1"
 
 # UUID generation
 uuid = { version = "1.9", features = ["v4", "serde"] }
@@ -47,7 +47,7 @@ chrono = { version = "0.4", features = ["clock", "serde"], default-features = fa
 urlencoding = "2.1"
 
 # Base64 decoding for subscription bodies
-base64 = "0.22"
+base64 = "0.23"
 
 # D-Bus integration for suspend/resume detection (systemd-logind)
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
@@ -56,7 +56,7 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 clap = { version = "4", features = ["derive"] }
 
 # Signal handling for graceful shutdown
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 # Unix UID for fallback socket path
 libc = "0.2"
@@ -66,7 +66,7 @@ notify = "8"
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 
 [dev-dependencies]
 insta = "1.47.2"

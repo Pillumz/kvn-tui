@@ -104,10 +104,10 @@ pub fn start(profile: &Profile, settings: &Settings) -> Result<ProcessHandle> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 let mut stderr = String::new();
-                if let Some(ref mut err) = child.stderr {
-                    if let Err(e) = err.read_to_string(&mut stderr) {
-                        tracing::warn!("Failed to read sing-box stderr: {}", e);
-                    }
+                if let Some(ref mut err) = child.stderr
+                    && let Err(e) = err.read_to_string(&mut stderr)
+                {
+                    tracing::warn!("Failed to read sing-box stderr: {}", e);
                 }
                 anyhow::bail!(
                     "sing-box exited immediately (code: {:?}). stderr: {}",

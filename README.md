@@ -3,7 +3,7 @@
 [![CI](https://github.com/yarikov/kvn-tui/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/yarikov/kvn-tui/actions/workflows/ci.yml)
 [![AUR version](https://img.shields.io/aur/version/kvn-tui-bin?logo=arch-linux&label=AUR)](https://aur.archlinux.org/packages/kvn-tui-bin)
 [![GitHub Release](https://img.shields.io/github/v/release/yarikov/kvn-tui?logo=github&label=release)](https://github.com/yarikov/kvn-tui/releases/latest)
-[![Rust Version](https://img.shields.io/badge/rust-1.87%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust Version](https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/github/license/yarikov/kvn-tui)](LICENSE)
 
 > Terminal VPN client for Arch Linux with vim navigation.
@@ -157,7 +157,7 @@ does not remove the integration or modify the active Waybar and Hyprland files.
 
 #### Prerequisites
 
-- **Rust** >= 1.87
+- **Rust** >= 1.88
 - **sing-box** >= 1.12 (external VPN backend, must be available on `$PATH`)
 - `base-devel`, `dbus`
 - `wl-clipboard` on Wayland, or `xclip` / `xsel` on X11, for clipboard import and export

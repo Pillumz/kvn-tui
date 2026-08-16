@@ -131,19 +131,19 @@ fn build_dns(dns: &DnsConfig) -> Value {
     block.insert("servers".to_string(), Value::Array(servers));
 
     let mut rules: Vec<Value> = dns.rules.iter().map(build_dns_rule).collect();
-    if dns.fakeip_enabled {
-        if let Some(server) = dns.fakeip_server() {
-            let tag = server.tag().to_string();
-            let already_routed = dns.rules.iter().any(|r| r.server == tag);
-            if !already_routed {
-                rules.insert(
-                    0,
-                    json!({
-                        "query_type": ["A", "AAAA"],
-                        "server": tag,
-                    }),
-                );
-            }
+    if dns.fakeip_enabled
+        && let Some(server) = dns.fakeip_server()
+    {
+        let tag = server.tag().to_string();
+        let already_routed = dns.rules.iter().any(|r| r.server == tag);
+        if !already_routed {
+            rules.insert(
+                0,
+                json!({
+                    "query_type": ["A", "AAAA"],
+                    "server": tag,
+                }),
+            );
         }
     }
     if !rules.is_empty() {
