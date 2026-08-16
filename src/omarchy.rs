@@ -41,9 +41,9 @@ pub fn omarchy_current_dir() -> Option<PathBuf> {
         .or_else(|| candidates.into_iter().next())
 }
 
-/// Path to the active Omarchy `theme.name` file.
-pub fn theme_name_path() -> Option<PathBuf> {
-    Some(omarchy_current_dir()?.join("theme.name"))
+/// Path to the semantic palette of the active Omarchy theme.
+pub fn theme_colors_path() -> Option<PathBuf> {
+    Some(omarchy_current_dir()?.join("theme").join("colors.toml"))
 }
 
 fn current_dir_candidates() -> Vec<PathBuf> {
@@ -147,7 +147,10 @@ mod tests {
         std::fs::write(legacy.join("theme.name"), "gruvbox\n").unwrap();
         std::fs::write(current.join("theme.name"), "lupine\n").unwrap();
         assert_eq!(detect_omarchy_theme().as_deref(), Some("lupine"));
-        assert_eq!(theme_name_path(), Some(current.join("theme.name")));
+        assert_eq!(
+            theme_colors_path(),
+            Some(current.join("theme").join("colors.toml"))
+        );
     }
 
     #[test]

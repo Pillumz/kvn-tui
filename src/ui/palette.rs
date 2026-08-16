@@ -2,11 +2,34 @@
 //!
 //! At build time `build.rs` parses `themes/*.toml` and emits a static
 //! `BUNDLED` table — see `bundled_palettes.rs` in `OUT_DIR`. At runtime the
-//! TUI client looks up the active Omarchy theme name and resolves it against
-//! that table; on non-Omarchy systems it falls back to [`Palette::legacy`],
-//! whose values reproduce the original hardcoded look of kvn-tui.
+//! The TUI client reads Omarchy's active `colors.toml` in auto-follow mode;
+//! explicitly selected themes continue to resolve against the bundled table.
+//! [`Palette::legacy`] reproduces the original hardcoded look of kvn-tui.
 
 use ratatui::style::Color;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct OmarchyColors {
+    accent: String,
+    selection: String,
+    muted: String,
+    foreground: String,
+    background: String,
+    bright_foreground: String,
+    red: String,
+    yellow: String,
+    green: String,
+    cyan: String,
+    blue: String,
+    magenta: String,
+    bright_red: String,
+    bright_yellow: String,
+    bright_green: String,
+    bright_cyan: String,
+    bright_blue: String,
+    bright_magenta: String,
+}
 
 /// A self-contained color palette derived at build time from Omarchy 4's
 /// semantic `colors.toml` schema.
@@ -24,6 +47,41 @@ pub struct Palette {
 include!(concat!(env!("OUT_DIR"), "/bundled_palettes.rs"));
 
 impl Palette {
+    /// Parse Omarchy's semantic `colors.toml` format into a runtime palette.
+    /// Extra fields are accepted so custom themes may use the complete
+    /// Omarchy schema while kvn-tui consumes only the colors it needs.
+    pub fn from_omarchy_toml(raw: &str) -> Result<Palette, String> {
+        let colors: OmarchyColors = toml::from_str(raw).map_err(|error| error.to_string())?;
+        let parse = |value: &str| parse_hex_color(value);
+
+        Ok(Palette {
+            accent: parse(&colors.accent)?,
+            cursor: parse(&colors.bright_foreground)?,
+            foreground: parse(&colors.foreground)?,
+            background: parse(&colors.background)?,
+            selection_foreground: parse(&colors.bright_foreground)?,
+            selection_background: parse(&colors.selection)?,
+            ansi: [
+                parse(&colors.background)?,
+                parse(&colors.red)?,
+                parse(&colors.green)?,
+                parse(&colors.yellow)?,
+                parse(&colors.blue)?,
+                parse(&colors.magenta)?,
+                parse(&colors.cyan)?,
+                parse(&colors.foreground)?,
+                parse(&colors.muted)?,
+                parse(&colors.bright_red)?,
+                parse(&colors.bright_green)?,
+                parse(&colors.bright_yellow)?,
+                parse(&colors.bright_blue)?,
+                parse(&colors.bright_magenta)?,
+                parse(&colors.bright_cyan)?,
+                parse(&colors.bright_foreground)?,
+            ],
+        })
+    }
+
     /// Look up a bundled palette by Omarchy theme name (snake-case slug from
     /// active `theme.name`).
     pub fn lookup(name: &str) -> Option<Palette> {
@@ -66,6 +124,21 @@ impl Palette {
             ],
         }
     }
+}
+
+fn parse_hex_color(value: &str) -> Result<Color, String> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("expected #RRGGBB color, got {value:?}"));
+    }
+    let component = |range: std::ops::Range<usize>| {
+        u8::from_str_radix(&hex[range], 16).map_err(|error| error.to_string())
+    };
+    Ok(Color::Rgb(
+        component(0..2)?,
+        component(2..4)?,
+        component(4..6)?,
+    ))
 }
 
 /// Linear interpolation between two colors in sRGB space. Used to derive a
@@ -156,6 +229,25 @@ mod tests {
     #[test]
     fn lookup_unknown_theme_returns_none() {
         assert!(Palette::lookup("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn parses_runtime_omarchy_palette() {
+        let raw = include_str!("../../themes/tokyo-night.toml")
+            .replace("#7aa2f7", "#010203")
+            .replace("#1a1b26", "#040506");
+        let palette = Palette::from_omarchy_toml(&raw).unwrap();
+        assert_eq!(palette.accent, Color::Rgb(1, 2, 3));
+        assert_eq!(palette.background, Color::Rgb(4, 5, 6));
+        assert_eq!(palette.ansi[0], Color::Rgb(4, 5, 6));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_invalid_runtime_palette() {
+        assert!(Palette::from_omarchy_toml("accent = '#ffffff'").is_err());
+        let invalid =
+            include_str!("../../themes/tokyo-night.toml").replace("#7aa2f7", "not-a-color");
+        assert!(Palette::from_omarchy_toml(&invalid).is_err());
     }
 
     #[test]

@@ -19,7 +19,8 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 
 use crate::app::msg::Msg;
-use crate::omarchy::{detect_omarchy_theme, omarchy_current_dir, theme_name_path};
+use crate::omarchy::{detect_omarchy_theme, omarchy_current_dir, theme_colors_path};
+use crate::ui::palette::Palette;
 use crate::ui::styles::Theme;
 
 /// Sentinel slug stored in `Settings.theme` to mean "follow Omarchy's
@@ -31,29 +32,35 @@ pub const OMARCHY_SENTINEL: &str = "omarchy";
 /// Omarchy isn't installed. Matches `Settings::default().theme`.
 pub const DEFAULT_THEME: &str = "tokyo-night";
 
-/// Resolve a `Settings.theme` slug into a concrete [`Theme`]. The
-/// reserved slug [`OMARCHY_SENTINEL`] means "follow Omarchy's current
-/// theme.name"; on systems without Omarchy it falls back to
-/// [`DEFAULT_THEME`]. Any other slug is looked up as a bundled palette
-/// (with `Theme::resolve` defaulting to legacy for unknown names).
+/// Resolve a `Settings.theme` slug into a concrete [`Theme`]. The reserved
+/// slug [`OMARCHY_SENTINEL`] loads Omarchy's current `theme/colors.toml`, then
+/// falls back to a bundled palette with the active name or [`DEFAULT_THEME`].
+/// Any other slug is looked up only as a bundled palette.
 pub fn resolve_active(settings_theme: &str) -> Theme {
     if settings_theme == OMARCHY_SENTINEL {
-        match detect_omarchy_theme() {
-            Some(name) => Theme::resolve(&name),
-            None => Theme::resolve(DEFAULT_THEME),
-        }
+        load_current_theme().unwrap_or_else(|| {
+            detect_omarchy_theme()
+                .as_deref()
+                .and_then(Palette::lookup)
+                .map(Theme::from_palette)
+                .unwrap_or_else(|| Theme::resolve(DEFAULT_THEME))
+        })
     } else {
         Theme::resolve(settings_theme)
     }
 }
 
+fn load_current_theme() -> Option<Theme> {
+    let raw = std::fs::read_to_string(theme_colors_path()?).ok()?;
+    Palette::from_omarchy_toml(&raw)
+        .ok()
+        .map(Theme::from_palette)
+}
+
 /// Spawn a background thread that watches Omarchy's active `current/` directory
-/// for theme changes and sends [`Msg::ThemeChanged`] when the active slug
+/// for theme changes and sends [`Msg::ThemeChanged`] when the active palette
 /// changes. Returns immediately and does nothing if Omarchy isn't installed.
 pub fn spawn_theme_watcher(tx: Sender<Msg>) {
-    let Some(theme_file) = theme_name_path() else {
-        return;
-    };
     let Some(watch_dir) = omarchy_current_dir() else {
         return;
     };
@@ -61,10 +68,10 @@ pub fn spawn_theme_watcher(tx: Sender<Msg>) {
         return;
     }
 
-    thread::spawn(move || run_watcher(tx, watch_dir, theme_file));
+    thread::spawn(move || run_watcher(tx, watch_dir));
 }
 
-fn run_watcher(tx: Sender<Msg>, watch_dir: PathBuf, theme_file: PathBuf) {
+fn run_watcher(tx: Sender<Msg>, watch_dir: PathBuf) {
     let (notify_tx, notify_rx) = std::sync::mpsc::channel();
     let mut watcher = match notify::recommended_watcher(move |res| {
         let _ = notify_tx.send(res);
@@ -72,16 +79,11 @@ fn run_watcher(tx: Sender<Msg>, watch_dir: PathBuf, theme_file: PathBuf) {
         Ok(w) => w,
         Err(_) => return,
     };
-    if watcher
-        .watch(&watch_dir, RecursiveMode::NonRecursive)
-        .is_err()
-    {
+    if watcher.watch(&watch_dir, RecursiveMode::Recursive).is_err() {
         return;
     }
 
-    let mut last_slug = std::fs::read_to_string(&theme_file)
-        .ok()
-        .map(|s| s.trim().to_string());
+    let mut last_theme = load_current_theme();
 
     loop {
         // Block until at least one event arrives, then drain any follow-ups
@@ -91,16 +93,13 @@ fn run_watcher(tx: Sender<Msg>, watch_dir: PathBuf, theme_file: PathBuf) {
         };
         while notify_rx.recv_timeout(Duration::from_millis(50)).is_ok() {}
 
-        let current = std::fs::read_to_string(&theme_file)
-            .ok()
-            .map(|s| s.trim().to_string());
-        if current != last_slug {
-            if let Some(ref slug) = current {
-                if tx.send(Msg::ThemeChanged(Theme::resolve(slug))).is_err() {
-                    return;
-                }
+        if let Some(current_theme) = load_current_theme()
+            && Some(current_theme) != last_theme
+        {
+            if tx.send(Msg::ThemeChanged(current_theme)).is_err() {
+                return;
             }
-            last_slug = current;
+            last_theme = Some(current_theme);
         }
     }
 }
@@ -151,12 +150,95 @@ mod tests {
         unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
         let current = state.path().join("omarchy").join("current");
         std::fs::create_dir_all(&current).unwrap();
-        std::fs::write(current.join("theme.name"), "nord\n").unwrap();
+        std::fs::create_dir_all(current.join("theme")).unwrap();
+        std::fs::write(current.join("theme.name"), "custom-theme\n").unwrap();
+        let raw = include_str!("../../themes/nord.toml").replace("#81a1c1", "#010203");
+        std::fs::write(current.join("theme").join("colors.toml"), raw).unwrap();
         let theme = resolve_active(OMARCHY_SENTINEL);
-        // Nord accent #81a1c1.
+        assert_eq!(theme.accent().fg, Some(ratatui::style::Color::Rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn auto_prefers_runtime_colors_for_bundled_slug() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        let current = state.path().join("omarchy").join("current");
+        std::fs::create_dir_all(current.join("theme")).unwrap();
+        std::fs::write(current.join("theme.name"), "nord\n").unwrap();
+        let raw = include_str!("../../themes/nord.toml").replace("#81a1c1", "#112233");
+        std::fs::write(current.join("theme").join("colors.toml"), raw).unwrap();
+
         assert_eq!(
-            theme.accent().fg,
+            resolve_active(OMARCHY_SENTINEL).accent().fg,
+            Some(ratatui::style::Color::Rgb(0x11, 0x22, 0x33))
+        );
+        assert_eq!(
+            resolve_active("nord").accent().fg,
             Some(ratatui::style::Color::Rgb(0x81, 0xa1, 0xc1))
+        );
+    }
+
+    #[test]
+    fn auto_falls_back_to_bundled_slug_for_invalid_runtime_colors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        let current = config.path().join("omarchy").join("current");
+        std::fs::create_dir_all(current.join("theme")).unwrap();
+        std::fs::write(current.join("theme.name"), "nord\n").unwrap();
+        std::fs::write(current.join("theme").join("colors.toml"), "invalid").unwrap();
+
+        assert_eq!(
+            resolve_active(OMARCHY_SENTINEL).accent().fg,
+            Some(ratatui::style::Color::Rgb(0x81, 0xa1, 0xc1))
+        );
+    }
+
+    #[test]
+    fn auto_reloads_changed_colors_without_slug_change() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        let current = state.path().join("omarchy").join("current");
+        let colors_path = current.join("theme").join("colors.toml");
+        std::fs::create_dir_all(current.join("theme")).unwrap();
+        std::fs::write(current.join("theme.name"), "custom-theme\n").unwrap();
+        let original = include_str!("../../themes/nord.toml").replace("#81a1c1", "#112233");
+        std::fs::write(&colors_path, original).unwrap();
+        assert_eq!(
+            resolve_active(OMARCHY_SENTINEL).accent().fg,
+            Some(ratatui::style::Color::Rgb(0x11, 0x22, 0x33))
+        );
+
+        let changed = include_str!("../../themes/nord.toml").replace("#81a1c1", "#445566");
+        std::fs::write(colors_path, changed).unwrap();
+        assert_eq!(
+            resolve_active(OMARCHY_SENTINEL).accent().fg,
+            Some(ratatui::style::Color::Rgb(0x44, 0x55, 0x66))
+        );
+    }
+
+    #[test]
+    fn auto_falls_back_to_default_for_unknown_invalid_theme() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", config.path()) };
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+        let current = state.path().join("omarchy").join("current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("theme.name"), "custom-theme\n").unwrap();
+
+        assert_eq!(
+            resolve_active(OMARCHY_SENTINEL).accent().fg,
+            Some(ratatui::style::Color::Rgb(0x7a, 0xa2, 0xf7))
         );
     }
 }
