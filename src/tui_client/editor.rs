@@ -31,6 +31,17 @@ fn detect_editor() -> String {
         })
 }
 
+/// Split an editor command into program and leading arguments.
+///
+/// $VISUAL/$EDITOR may contain flags, not just a binary — Omarchy 4 sets
+/// `EDITOR="omarchy-launch-editor --inline"` — so the value cannot be passed
+/// to `Command::new` whole.
+fn split_editor(editor: &str) -> (String, Vec<String>) {
+    let mut parts = editor.split_whitespace().map(String::from);
+    let program = parts.next().unwrap_or_else(|| "vi".to_string());
+    (program, parts.collect())
+}
+
 /// RAII guard that restores terminal state when dropped.
 ///
 /// On creation: leaves the alternate screen and disables raw mode.
@@ -205,6 +216,7 @@ fn editor_args(editor: &str, path: &Path, line: usize) -> Vec<String> {
 /// the application can reload.
 pub fn open_profiles_editor(profile_index: usize) -> Result<Config> {
     let editor = detect_editor();
+    let (program, base_args) = split_editor(&editor);
     let path = profiles_path().context("Failed to determine profiles path")?;
 
     ensure_profiles_file(&path)?;
@@ -214,12 +226,13 @@ pub fn open_profiles_editor(profile_index: usize) -> Result<Config> {
     let _guard = TerminalGuard::new().context("Failed to restore terminal for external editor")?;
 
     let args = if let Some(line) = find_profile_line(&path, profile_index) {
-        editor_args(&editor, &path, line)
+        editor_args(&program, &path, line)
     } else {
         vec![path.display().to_string()]
     };
 
-    let status = Command::new(&editor)
+    let status = Command::new(&program)
+        .args(&base_args)
         .args(&args)
         .status()
         .with_context(|| format!("Failed to launch editor: {}", editor))?;
@@ -392,6 +405,27 @@ mod tests {
     }
 
     // ---- editor_args ----
+
+    #[test]
+    fn split_editor_bare_program() {
+        assert_eq!(split_editor("nvim"), ("nvim".to_string(), vec![]));
+    }
+
+    #[test]
+    fn split_editor_program_with_flags() {
+        assert_eq!(
+            split_editor("omarchy-launch-editor --inline"),
+            (
+                "omarchy-launch-editor".to_string(),
+                vec!["--inline".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn split_editor_empty_falls_back_to_vi() {
+        assert_eq!(split_editor(""), ("vi".to_string(), vec![]));
+    }
 
     #[test]
     fn editor_args_vim_uses_plus_line() {
