@@ -45,7 +45,7 @@
 - **Clipboard import** — import share links for any supported protocol or subscription URLs directly from the system clipboard
 - **Yank to clipboard** — export the selected profile back to a share link with `y`, ready to paste into another client (or copy a subscription's source URL)
 - **Subscription support** — subscribe to remote profile feeds (HTTP/HTTPS, Base64 or plain-text, mixed-protocol); configurable auto-update interval (off / 1h / 12h / 1d / 7d)
-- **Geo region & routing** — pick Russia, China, Iran, or Global on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets with `u` or cycle background auto-update (`off` / `12h` / `1d` / `3d` / `7d`) with `Shift+I`
+- **Geo region & routing** — pick a regional routing preset on first launch; only relevant routing modes (Global / Bypass / Only) and geoip/geosite rule-sets are shown and downloaded; refresh rule-sets with `u` or cycle background auto-update (`off` / `12h` / `1d` / `3d` / `7d`) with `Shift+I`
 - **Kill switch** — block all outbound traffic if the VPN connection drops; toggled with `K`; powered by nftables + a systemd unit
 - **DNS configuration** — built-in presets (Cloudflare DoH, Google DoT, Quad9 DoH, system resolver), strategy cycle, fake-IP toggle (sing-box 1.12 API), plus custom servers and per-domain routing rules via `profiles.json`; opened with `D`
 - **Auto-connect** — automatically reconnect to the last used profile on startup
@@ -236,7 +236,7 @@ kvn-tui
 > sudo setcap cap_net_admin,cap_net_raw+ep "$(command -v sing-box)"
 > ```
 
-On first launch a modal overlay prompts you to pick a geo region (Russia, China, Iran, or Global). After that, the main UI opens with an empty profile list.
+On first launch a modal overlay prompts you to pick a regional routing preset. After that, the main UI opens with an empty profile list.
 
 Typical first connection:
 
@@ -331,12 +331,7 @@ The file contains your profile list and application settings (default profile, T
 
 When `auto_connect` is enabled, the application stores `last_connected_profile` and automatically connects to that profile on the next startup.
 
-`settings.geo_routing.current_region` controls which country rule-sets are downloaded and which routing modes are available. Valid values: `ru`, `cn`, `ir`, or `global`. The `settings.geo_routing.selected_region_modes` map remembers the routing mode previously selected for each region, while `settings.geo_routing.auto_update` controls background rule-set updates.
-
-- `ru` — download RU geoip/geosite, enable Global / Bypass RU / Only RU
-- `cn` — download CN geoip/geosite, enable Global / Bypass CN / Only CN
-- `ir` — download IR geoip/geosite, enable Global / Bypass IR / Only IR
-- `global` — skip geo downloads, enable Global only
+`settings.geo_routing.current_region` controls which regional rule-sets are downloaded and which routing modes are available. The `settings.geo_routing.selected_region_modes` map remembers the routing mode previously selected for each region, while `settings.geo_routing.auto_update` controls background rule-set updates. Select `global` to skip geo downloads and use Global routing only.
 
 On the very first launch (or when `geo_routing.current_region` is absent), a modal overlay forces you to pick a region before the main UI becomes usable.
 
